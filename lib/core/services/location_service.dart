@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
 class LocationService {
@@ -6,17 +7,12 @@ class LocationService {
 
   /// Memeriksa & meminta izin akses lokasi di Android/iOS
   Future<bool> requestPermission() async {
-    bool serviceEnabled;
-    LocationPermission permission;
-
-    // Cek apakah layanan GPS di HP aktif
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       return false;
     }
 
-    // Cek status izin lokasi dari pengguna
-    permission = await Geolocator.checkPermission();
+    LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
@@ -31,17 +27,31 @@ class LocationService {
     return true;
   }
 
-  /// Memulai aliran data GPS (Stream) secara real-time saat pengguna lari
+  /// Memulai aliran data GPS real-time dengan dukungan Background / Screen-Off Android
   Stream<Position> getPositionStream() {
-    const LocationSettings locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high, // Presisi tinggi untuk pelacakan rute lari
-      distanceFilter: 5,               // Mengirim update posisi setiap berpindah 5 meter
-    );
+    late LocationSettings locationSettings;
+
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      locationSettings = AndroidSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 4,
+        intervalDuration: const Duration(seconds: 2),
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationTitle: 'Adventure Runner • Merekam Rute',
+          notificationText: 'Pelacakan GPS aktif di latar belakang',
+          enableWakeLock: true,
+        ),
+      );
+    } else {
+      locationSettings = const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 4,
+      );
+    }
 
     return Geolocator.getPositionStream(locationSettings: locationSettings);
   }
 
-  /// Menghentikan pelacakan GPS saat sesi lari selesai
   void stopTracking() {
     _positionSubscription?.cancel();
   }

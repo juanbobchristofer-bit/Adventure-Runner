@@ -1,5 +1,9 @@
+import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart' hide Path;
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
 import '../domain/run_model.dart';
 import 'run_detail_screen.dart';
@@ -13,20 +17,38 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final RunStorageService _storageService = RunStorageService();
+  final ProfileStorageService _profileService = ProfileStorageService();
+
   List<RunModel> _savedRuns = [];
+  UserProfileData _profile = const UserProfileData(
+    name: 'Pelari Adventure',
+    bio: 'Chasing new personal records every mile.',
+    city: 'Jatinangor, Indonesia',
+    weightKg: 65.0,
+    weeklyGoalKm: 15.0,
+  );
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadRuns();
+    _loadRunsAndProfile();
+    ProfileStorageService.profileUpdateNotifier.addListener(_loadRunsAndProfile);
   }
 
-  Future<void> _loadRuns() async {
+  @override
+  void dispose() {
+    ProfileStorageService.profileUpdateNotifier.removeListener(_loadRunsAndProfile);
+    super.dispose();
+  }
+
+  Future<void> _loadRunsAndProfile() async {
     final runs = await _storageService.getSavedRuns();
+    final profile = await _profileService.getProfile();
     if (mounted) {
       setState(() {
         _savedRuns = runs;
+        _profile = profile;
         _isLoading = false;
       });
     }
@@ -34,173 +56,584 @@ class _HomeScreenState extends State<HomeScreen> {
 
   double get _totalDistance => _savedRuns.fold(0.0, (sum, item) => sum + item.distanceInKm);
   int get _totalSeconds => _savedRuns.fold(0, (sum, item) => sum + item.durationInSeconds);
+  double get _totalCalories => _savedRuns.fold(0.0, (sum, item) => sum + item.calories);
 
   String _formatTotalTime(int seconds) {
     final int hours = seconds ~/ 3600;
     final int minutes = (seconds % 3600) ~/ 60;
+    if (hours == 0) return '${minutes}m';
     return '${hours}j ${minutes}m';
+  }
+
+  String get _runnerRank {
+    if (_totalDistance >= 100) return 'ELITE MARATHONER';
+    if (_totalDistance >= 42) return 'TRAIL CONQUEROR';
+    if (_totalDistance >= 15) return 'CITY PACER';
+    if (_totalDistance > 0) return 'ACTIVE STRIDER';
+    return 'ROOKIE RUNNER';
+  }
+
+  List<double> get _recentBarValues {
+    if (_savedRuns.isEmpty) return List.filled(7, 0.0);
+    final recent = _savedRuns.take(7).toList().reversed.toList();
+    final padded = List<double>.filled(7, 0.0);
+    for (int i = 0; i < recent.length; i++) {
+      padded[7 - recent.length + i] = recent[i].distanceInKm;
+    }
+    return padded;
+  }
+
+  void _showEditGoalDialog() {
+    final controller = TextEditingController(text: _profile.weeklyGoalKm.toStringAsFixed(0));
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cardDark,
+        title: const Text('Target Jarak Lari (km)', style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'Contoh: 20',
+            hintStyle: TextStyle(color: Colors.grey),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primaryOrange)),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: AppColors.primaryOrange, width: 2)),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            onPressed: () async {
+              final val = double.tryParse(controller.text);
+              if (val != null && val > 0) {
+                await _profileService.saveWeeklyGoal(val);
+              }
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Simpan', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final double goalProgress = (_totalDistance / _profile.weeklyGoalKm).clamp(0.0, 1.0);
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('ADVENTURE RUNNER', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.5)),
-        backgroundColor: AppColors.cardDark,
-        elevation: 0,
-        actions: [
-          IconButton(onPressed: _loadRuns, icon: const Icon(Icons.refresh)),
-        ],
-      ),
+      backgroundColor: AppColors.backgroundDark,
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: AppColors.primaryOrange))
           : RefreshIndicator(
-              onRefresh: _loadRuns,
+              onRefresh: _loadRunsAndProfile,
               color: AppColors.primaryOrange,
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.cardDark,
-                      borderRadius: BorderRadius.circular(12),
+              child: CustomScrollView(
+                slivers: [
+                  SliverAppBar(
+                    expandedHeight: 105,
+                    floating: true,
+                    pinned: true,
+                    backgroundColor: AppColors.backgroundDark,
+                    elevation: 0,
+                    flexibleSpace: FlexibleSpaceBar(
+                      titlePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      title: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryOrange,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Icon(Icons.bolt, color: Colors.white, size: 16),
+                          ),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'ADVENTURE RUNNER',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 15,
+                              letterSpacing: 1.2,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Cuplikan Aktivitas Anda', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(height: 12),
+                    actions: [
+                      IconButton(
+                        tooltip: 'Refresh Data',
+                        onPressed: _loadRunsAndProfile,
+                        icon: const Icon(Icons.sync, color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                    sliver: SliverList(
+                      delegate: SliverChildListDelegate([
+                        _buildHeroPerformanceCard(goalProgress),
+                        const SizedBox(height: 16),
+                        _buildPerformanceChartCard(),
+                        const SizedBox(height: 22),
                         Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            _buildSummaryColumn('Aktivitas', '${_savedRuns.length}'),
-                            _buildSummaryColumn('Waktu', _formatTotalTime(_totalSeconds)),
-                            _buildSummaryColumn('Jarak', '${_totalDistance.toStringAsFixed(2)} km'),
+                            const Text(
+                              'Riwayat Aktivitas',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.white),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppColors.cardDark,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: Text(
+                                '${_savedRuns.length} Sesi',
+                                style: const TextStyle(color: AppColors.primaryOrange, fontSize: 12, fontWeight: FontWeight.w600),
+                              ),
+                            ),
                           ],
                         ),
-                      ],
+                        const SizedBox(height: 12),
+                        if (_savedRuns.isEmpty)
+                          _buildEmptyState()
+                        else
+                          ..._savedRuns.map((run) => Padding(
+                                padding: const EdgeInsets.only(bottom: 14),
+                                child: Dismissible(
+                                  key: Key(run.id),
+                                  direction: DismissDirection.endToStart,
+                                  background: Container(
+                                    alignment: Alignment.centerRight,
+                                    padding: const EdgeInsets.only(right: 22),
+                                    decoration: BoxDecoration(
+                                      color: Colors.redAccent.withOpacity(0.9),
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Icon(Icons.delete_outline, color: Colors.white, size: 28),
+                                        SizedBox(height: 4),
+                                        Text('Hapus', style: TextStyle(color: Colors.white, fontSize: 11)),
+                                      ],
+                                    ),
+                                  ),
+                                  onDismissed: (direction) async {
+                                    await _storageService.deleteRun(run.id);
+                                    _loadRunsAndProfile();
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Aktivitas lari dihapus'),
+                                          backgroundColor: AppColors.cardElevated,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: _buildModernActivityCard(context, run),
+                                ),
+                              )),
+                      ]),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  const Text('Aktivitas Terbaru', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 10),
-
-                  if (_savedRuns.isEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(30),
-                      alignment: Alignment.center,
-                      child: const Text('Belum ada aktivitas lari. Klik tab Rekam untuk mulai!', style: TextStyle(color: Colors.grey)),
-                    )
-                  else
-                    ..._savedRuns.map((run) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Dismissible(
-                            key: Key(run.id),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20),
-                              decoration: BoxDecoration(
-                                color: Colors.redAccent,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(Icons.delete, color: Colors.white),
-                            ),
-                            onDismissed: (direction) async {
-                              await _storageService.deleteRun(run.id);
-                              _loadRuns();
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Aktivitas dihapus')),
-                                );
-                              }
-                            },
-                            child: _buildActivityCard(context, run),
-                          ),
-                        )),
                 ],
               ),
             ),
     );
   }
 
-  Widget _buildSummaryColumn(String label, String value) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-        const SizedBox(height: 4),
-        Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-      ],
+  Widget _buildHeroPerformanceCard(double goalProgress) {
+    final hasAvatar = _profile.avatarPath != null;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF251A16), AppColors.cardDark],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.primaryOrange.withOpacity(0.35), width: 1),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  SizedBox(
+                    width: 72,
+                    height: 72,
+                    child: CircularProgressIndicator(
+                      value: goalProgress,
+                      strokeWidth: 4.5,
+                      backgroundColor: Colors.white10,
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primaryOrange),
+                    ),
+                  ),
+                  CircleAvatar(
+                    radius: 29,
+                    backgroundColor: AppColors.cardElevated,
+                    backgroundImage: hasAvatar ? FileImage(File(_profile.avatarPath!)) : null,
+                    child: !hasAvatar ? const Icon(Icons.person, color: Colors.white70, size: 28) : null,
+                  ),
+                ],
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryOrange.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _runnerRank,
+                        style: const TextStyle(
+                          color: AppColors.primaryOrange,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 10,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _profile.name,
+                      style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Colors.white),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 3),
+                    GestureDetector(
+                      onTap: _showEditGoalDialog,
+                      child: Row(
+                        children: [
+                          Text(
+                            'Target: ${_totalDistance.toStringAsFixed(1)} / ${_profile.weeklyGoalKm.toStringAsFixed(0)} km (${(goalProgress * 100).toInt()}%)',
+                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.edit, size: 12, color: AppColors.primaryOrange),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          const Divider(color: Colors.white10, height: 1),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildMetricPill(Icons.straighten, 'Total Jarak', '${_totalDistance.toStringAsFixed(2)} km', AppColors.primaryOrange),
+              _buildMetricPill(Icons.timer_outlined, 'Total Waktu', _formatTotalTime(_totalSeconds), AppColors.accentBlue),
+              _buildMetricPill(Icons.local_fire_department_outlined, 'Kalori', '${_totalCalories.toStringAsFixed(0)} kcal', AppColors.accentGreen),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
-  Widget _buildActivityCard(BuildContext context, RunModel run) {
+  Widget _buildMetricPill(IconData icon, String label, String value, Color accentColor) {
+    return Expanded(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 4),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.black26,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: accentColor, size: 18),
+            const SizedBox(height: 6),
+            Text(
+              value,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 10)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPerformanceChartCard() {
+    final values = _recentBarValues;
+    final double maxVal = values.reduce(math.max);
+    final double chartMax = maxVal > 0 ? maxVal : 5.0;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Tren Jarak (7 Sesi Terakhir)',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+              ),
+              Text(
+                'Maks: ${maxVal.toStringAsFixed(1)} km',
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 95,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: List.generate(7, (index) {
+                final val = values[index];
+                final double ratio = (val / chartMax).clamp(0.08, 1.0);
+                final bool isLatest = index == 6 && val > 0;
+
+                return Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Text(
+                      val > 0 ? val.toStringAsFixed(1) : '-',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: isLatest ? FontWeight.bold : FontWeight.normal,
+                        color: isLatest ? AppColors.primaryOrange : AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 500),
+                      width: 24,
+                      height: 62 * ratio,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        gradient: LinearGradient(
+                          begin: Alignment.bottomCenter,
+                          end: Alignment.topCenter,
+                          colors: isLatest
+                              ? [AppColors.primaryOrange, AppColors.primaryOrangeLight]
+                              : val > 0
+                                  ? [AppColors.primaryOrange.withOpacity(0.45), AppColors.primaryOrange.withOpacity(0.75)]
+                                  : [Colors.white10, Colors.white10],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text('S${index + 1}', style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+                  ],
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModernActivityCard(BuildContext context, RunModel run) {
+    final String badgeLabel = run.distanceInKm >= 10
+        ? '10K PRO'
+        : run.distanceInKm >= 5
+            ? '5K RUN'
+            : 'DAILY RUN';
+    final bool hasPhoto = run.photoPath != null && File(run.photoPath!).existsSync();
+    final bool hasUserAvatar = _profile.avatarPath != null;
+
     return GestureDetector(
       onTap: () async {
         final result = await Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (context) => RunDetailScreen(run: run),
-          ),
+          MaterialPageRoute(builder: (context) => RunDetailScreen(run: run)),
         );
-
-        if (result == true) {
-          _loadRuns(); // Reload jika aktivitas dihapus dari halaman detail
-        }
+        if (result == true) _loadRunsAndProfile();
       },
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.cardDark,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white10),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header Post ala Strava (Avatar + Nama + Tanggal + Badge)
             Row(
               children: [
-                const CircleAvatar(
-                  backgroundColor: AppColors.primaryOrange,
-                  child: Icon(Icons.person, color: Colors.white),
+                CircleAvatar(
+                  radius: 17,
+                  backgroundColor: AppColors.cardElevated,
+                  backgroundImage: hasUserAvatar ? FileImage(File(_profile.avatarPath!)) : null,
+                  child: !hasUserAvatar ? const Icon(Icons.person, size: 18, color: Colors.white70) : null,
                 ),
-                const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Juan Haloho', style: TextStyle(fontWeight: FontWeight.bold)),
-                    Text(run.date, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                  ],
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _profile.name,
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.white),
+                      ),
+                      Text(
+                        '${run.date} • ${_profile.city}',
+                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryOrange.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    badgeLabel,
+                    style: const TextStyle(color: AppColors.primaryOrange, fontSize: 10, fontWeight: FontWeight.w800),
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            Text(run.title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+
+            // Judul, Feeling & Caption Pengalaman Lari
+            Text(
+              run.title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            if (run.feeling.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                run.feeling,
+                style: const TextStyle(color: AppColors.primaryOrangeLight, fontSize: 11.5, fontWeight: FontWeight.w600),
+              ),
+            ],
+            if (run.notes.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                run.notes,
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
             const SizedBox(height: 12),
+
+            // Media Showcase: Foto Momen Lari + Mini Trek Rute GPS
+            if (hasPhoto)
+              SizedBox(
+                height: 165,
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(
+                          File(run.photoPath!),
+                          height: 165,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: Container(
+                        height: 165,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.backgroundDark,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: SizedBox.expand(
+                                child: CustomPaint(painter: _MiniRoutePainter(run.routePoints)),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            const Text('GPS TRACK', style: TextStyle(color: AppColors.textSecondary, fontSize: 9, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Container(
+                height: 85,
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.backgroundDark,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: CustomPaint(
+                        size: const Size(double.infinity, 60),
+                        painter: _MiniRoutePainter(run.routePoints),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      '${run.calories.toStringAsFixed(0)} kcal\n${run.steps} langkah',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 14),
+            const Divider(color: Colors.white10, height: 1),
+            const SizedBox(height: 12),
+
+            // Baris Statistik Bawah
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Jarak', style: TextStyle(color: Colors.grey, fontSize: 11)),
-                    Text('${run.distanceInKm.toStringAsFixed(2)} km', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Pace', style: TextStyle(color: Colors.grey, fontSize: 11)),
-                    Text('${run.pace} /km', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Langkah', style: TextStyle(color: Colors.grey, fontSize: 11)),
-                    Text('${run.steps} step', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                  ],
-                ),
+                _buildCardStat('JARAK', '${run.distanceInKm.toStringAsFixed(2)} km'),
+                _buildCardStat('AVG PACE', '${run.pace} /km'),
+                _buildCardStat('DURASI', _formatTotalTime(run.durationInSeconds)),
+                const Icon(Icons.chevron_right, color: AppColors.primaryOrange),
               ],
             ),
           ],
@@ -208,4 +641,113 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
+  Widget _buildCardStat(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 10, letterSpacing: 0.5)),
+        const SizedBox(height: 3),
+        Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+      ],
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: const Column(
+        children: [
+          Icon(Icons.directions_run, size: 48, color: AppColors.primaryOrange),
+          SizedBox(height: 12),
+          Text('Siap Memulai Petualangan?', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+          SizedBox(height: 6),
+          Text(
+            'Belum ada rekaman lari. Buka tab Rekam di bawah untuk mulai melacak rute GPS pertamamu!',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MiniRoutePainter extends CustomPainter {
+  final List<LatLng> points;
+
+  _MiniRoutePainter(this.points);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.length < 2) {
+      final paint = Paint()
+        ..color = Colors.white24
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+      final path = Path()
+        ..moveTo(size.width * 0.2, size.height * 0.8)
+        ..quadraticBezierTo(size.width * 0.2, size.height * 0.2, size.width * 0.5, size.height * 0.5)
+        ..quadraticBezierTo(size.width * 0.8, size.height * 0.8, size.width * 0.8, size.height * 0.2);
+      canvas.drawPath(path, paint);
+      return;
+    }
+
+    double minLat = points.first.latitude;
+    double maxLat = points.first.latitude;
+    double minLng = points.first.longitude;
+    double maxLng = points.first.longitude;
+
+    for (final p in points) {
+      if (p.latitude < minLat) minLat = p.latitude;
+      if (p.latitude > maxLat) maxLat = p.latitude;
+      if (p.longitude < minLng) minLng = p.longitude;
+      if (p.longitude > maxLng) maxLng = p.longitude;
+    }
+
+    final double latSpan = (maxLat - minLat) == 0 ? 0.0001 : (maxLat - minLat);
+    final double lngSpan = (maxLng - minLng) == 0 ? 0.0001 : (maxLng - minLng);
+
+    final path = Path();
+    Offset? startOffset;
+    Offset? endOffset;
+
+    for (int i = 0; i < points.length; i++) {
+      final normX = (points[i].longitude - minLng) / lngSpan;
+      final normY = 1.0 - ((points[i].latitude - minLat) / latSpan);
+      final offset = Offset(normX * size.width, normY * size.height);
+
+      if (i == 0) {
+        path.moveTo(offset.dx, offset.dy);
+        startOffset = offset;
+      } else {
+        path.lineTo(offset.dx, offset.dy);
+        endOffset = offset;
+      }
+    }
+
+    final routePaint = Paint()
+      ..color = AppColors.primaryOrange
+      ..strokeWidth = 2.4
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    canvas.drawPath(path, routePaint);
+
+    if (startOffset != null) {
+      canvas.drawCircle(startOffset, 2.8, Paint()..color = AppColors.accentGreen);
+    }
+    if (endOffset != null) {
+      canvas.drawCircle(endOffset, 2.8, Paint()..color = Colors.white);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniRoutePainter oldDelegate) => oldDelegate.points != points;
 }
