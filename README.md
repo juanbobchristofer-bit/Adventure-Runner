@@ -28,8 +28,8 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 *   **🏃‍♂️ Strava-Like Activity Posting:** Post your runs with custom titles, personal notes/captions, mood/vibe tags (`feeling`), and photo documentation captured from your gallery or camera.
 *   **👟 Step Counting & Biometric Calories:** Integrates hardware pedometer streams and user weight metrics for precise calorie expenditure and cadence calculations.
 *   **📊 Post-Run Telemetry & Analysis:** Detailed split-per-kilometer breakdown, training intensity zones (Recovery, Aerobic, Tempo, Threshold), average speed, and one-tap summary copying for WhatsApp/Instagram.
-*   **🏆 Gamification & Profile System:** XP and runner leveling, 8 unlockable milestone badges, personal best records (longest run & duration), and editable user profiles.
-*   **👥 Offline Clubs & Challenges:** Simulated local running groups with dynamic leaderboards that sync with your actual running history, plus monthly endurance challenges and event RSVPs.
+*   **🏆 Gamification & Profile System:** Unified XP & runner leveling (from runs + claimable challenge bonus XP), 8 unlockable milestone badges, personal best records, and editable user profiles.
+*   **👥 Online Community, Level Gating, Live Chat & Friends (Supabase):** Flexible authentication (Email/Password + Offline Guest Mode), level-gated Challenges with claimable XP rewards, level-gated Running Clubs with Live Weekly Leaderboards & Realtime Club Chat, level/quota-gated Community Events with Live Event Discussion, and a full Friends system (search runners, Add Friend, accept/decline, and Friends Weekly Leaderboard) with automatic offline fallback.
 
 ---
 
@@ -37,7 +37,8 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 
 *   **Framework:** Flutter (SDK `>=3.0.0 <4.0.0`)
 *   **Language:** Dart
-*   **Geospatial & Mapping:** `flutter_map`, `latlong2`, `geolocator`
+*   **Backend & Realtime:** `supabase_flutter` (Auth, PostgreSQL, Row Level Security, Realtime Chat)
+*   **Geospatial & Mapping:** `flutter_map`, `latlong2`, `geolocator` + custom offline OSM tile disk cache
 *   **Sensors:** `pedometer`, `permission_handler`
 *   **Local Storage:** Atomic file-based JSON repository (`path_provider` + per-run GPS track files + GPX 1.1 export) & `shared_preferences`
 *   **Media Handling:** `image_picker`
@@ -51,13 +52,18 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 lib/
 ├── main.dart
 ├── core/
+│   ├── config/
+│   │   └── supabase_config.dart             # Supabase URL & publishable key (--dart-define ready)
 │   ├── constants/
 │   │   └── app_colors.dart                  # Custom dark athletic color palette
 │   ├── services/
+│   │   ├── auth_service.dart                # Flexible Email Auth + Offline Guest Mode & cloud sync
+│   │   ├── community_service.dart           # Online Challenges, Clubs, Events & Realtime Chat
+│   │   ├── friends_service.dart             # Search runners, Add Friend & Friends Leaderboard
 │   │   ├── location_service.dart            # Background GPS & foreground config (Android/iOS)
 │   │   ├── offline_tile_provider.dart       # Offline-first disk caching for OSM map tiles
 │   │   ├── pedometer_service.dart           # Raw step counter stream handler
-│   │   ├── profile_storage_service.dart     # User profile & biometrics repository
+│   │   ├── profile_storage_service.dart     # User profile, biometrics & bonus XP repository
 │   │   └── run_storage_service.dart         # Atomic file-based run DB, migration & GPX export
 │   ├── utils/
 │   │   ├── formatters.dart                  # Shared clock & compact duration formatters
@@ -66,19 +72,31 @@ lib/
 │       ├── dark_osm_tile_layer.dart         # Reusable dark-mode OSM tile layer & attribution
 │       └── mini_route_painter.dart          # Lightweight mini GPS polyline canvas painter
 └── features/
+    ├── auth/
+    │   └── presentation/
+    │       └── login_screen.dart            # Flexible Login / Register / Guest Mode screen
     └── tracking/
         ├── data/
-        │   └── community_seed_data.dart     # Curated local challenges, clubs & events data
+        │   └── community_seed_data.dart     # Offline fallback community data
         ├── domain/
         │   ├── run_model.dart               # Core workout & GPS trackpoint data model
-        │   └── runner_stats.dart            # Unified XP, rank, weekly distance & split telemetry
+        │   └── runner_stats.dart            # Unified XP, rank, level gating & split telemetry
         └── presentation/
             ├── main_navigation_screen.dart  # 5-tab navigation shell & guided route switcher
             ├── home_screen.dart             # Dashboard, weekly goal & activity feed
             ├── record_run_screen.dart       # Live tracking, auto-pause & guided route overlay
             ├── post_run_screen.dart         # Post-run caption, feeling, photo & save flow
             ├── map_explore_screen.dart      # Route explorer & filter view
-            ├── group_screen.dart            # Offline clubs, weekly leaderboards & events
-            ├── profile_screen.dart          # User stats, level, badges & offline cache settings
+            ├── group_screen.dart            # 4-tab Community hub (Tantangan, Klub, Acara, Teman)
+            ├── club_detail_screen.dart      # Live Weekly Leaderboard & Realtime Club Chat
+            ├── event_detail_screen.dart     # Event Quota, Live Discussion & Attendees
+            ├── friends_tab_view.dart        # Runner search, friend requests & Friends Leaderboard
+            ├── profile_screen.dart          # User stats, level, badges, cloud account & cache settings
             └── run_detail_screen.dart       # Telemetry, actual splits, edit activity & GPX export
+supabase/
+├── schema.sql                               # Complete PostgreSQL schema, GRANTs & RLS policies
+├── migration_p1_challenges.sql              # Level gating & XP reward claim migration
+├── migration_p2_clubs.sql                   # Club min_level & Realtime club_messages migration
+├── migration_p3_events.sql                  # Event min_level, quota & Realtime event_messages migration
+└── migration_p4_friends.sql                 # Friendships table & RLS migration
 ```

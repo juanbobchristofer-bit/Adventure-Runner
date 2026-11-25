@@ -14,6 +14,7 @@ import '../domain/run_model.dart';
 import '../domain/runner_stats.dart';
 import 'club_detail_screen.dart';
 import 'event_detail_screen.dart';
+import 'friends_tab_view.dart';
 
 class GroupScreen extends StatefulWidget {
   const GroupScreen({super.key});
@@ -958,7 +959,7 @@ class _GroupScreenState extends State<GroupScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         backgroundColor: AppColors.backgroundDark,
         appBar: AppBar(
@@ -1015,11 +1016,12 @@ class _GroupScreenState extends State<GroupScreen> {
             indicatorWeight: 3,
             labelColor: AppColors.primaryOrange,
             unselectedLabelColor: AppColors.textSecondary,
-            labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
             tabs: [
               Tab(text: 'Tantangan'),
               Tab(text: 'Klub'),
               Tab(text: 'Acara'),
+              Tab(text: 'Teman'),
             ],
           ),
         ),
@@ -1035,6 +1037,15 @@ class _GroupScreenState extends State<GroupScreen> {
                         _buildChallengesTab(),
                         _buildClubsTab(),
                         _buildEventsTab(),
+                        FriendsTabView(
+                          currentUserName: _profile.name,
+                          currentUserCity: _profile.city,
+                          currentUserAvatarPath: _profile.avatarPath,
+                          currentUserLevel: _userLevel,
+                          currentUserWeeklyKm: RunnerStats.weeklyDistance(_savedRuns),
+                          currentUserWeeklyRuns: RunnerStats.weeklyRunsCount(_savedRuns),
+                          onRequireLogin: _ensureLoggedInForOnlineAction,
+                        ),
                       ],
                     ),
             ),

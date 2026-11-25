@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/community_service.dart';
+import '../../../core/services/friends_service.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../domain/runner_stats.dart';
 
@@ -31,11 +32,13 @@ class EventDetailScreen extends StatefulWidget {
 
 class _EventDetailScreenState extends State<EventDetailScreen> {
   final CommunityService _communityService = CommunityService();
+  final FriendsService _friendsService = FriendsService();
   final TextEditingController _msgCtrl = TextEditingController();
   final ScrollController _chatScrollCtrl = ScrollController();
 
   late OnlineEvent _event;
   List<EventAttendee> _attendees = [];
+  Map<String, FriendItem> _friendRelations = {};
   List<EventMessage> _messages = [];
   bool _loadingAttendees = true;
   bool _loadingChat = true;
@@ -75,15 +78,30 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
   Future<void> _loadAttendees() async {
     try {
       final list = await _communityService.fetchEventAttendees(_event.id);
+      final friendSnap = AuthService.isLoggedIn
+          ? await _friendsService.fetchFriendsSnapshot()
+          : const FriendsSnapshot(isAvailable: false);
       if (mounted) {
         setState(() {
           _attendees = list;
+          _friendRelations = friendSnap.relationByUserId;
           _event = _event.copyWith(attendeesCount: list.length);
           _loadingAttendees = false;
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loadingAttendees = false);
+    }
+  }
+
+  Future<void> _addFriendFromEvent(EventAttendee attendee) async {
+    if (!await _ensureLoggedIn()) return;
+    try {
+      await _friendsService.sendFriendRequest(attendee.userId);
+      await _loadAttendees();
+      _showSnack('Permintaan pertemanan dikirim ke ${attendee.name}!');
+    } catch (e) {
+      _showSnack('Gagal menambah teman: $e', isError: true);
     }
   }
 
@@ -727,12 +745,44 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
                     ],
                   ),
                 ),
-                const Icon(Icons.check_circle, color: AppColors.accentGreen, size: 18),
+                if (a.isCurrentUser)
+                  const Icon(Icons.check_circle, color: AppColors.accentGreen, size: 18)
+                else
+                  _buildQuickFriendAction(a),
               ],
             ),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildQuickFriendAction(EventAttendee attendee) {
+    final relation = _friendRelations[attendee.userId];
+    final status = relation?.status ?? FriendRelationStatus.none;
+
+    if (status == FriendRelationStatus.accepted) {
+      return const Tooltip(
+        message: 'Sudah Berteman',
+        child: Icon(Icons.how_to_reg, color: AppColors.accentGreen, size: 19),
+      );
+    }
+    if (status == FriendRelationStatus.pendingOutgoing) {
+      return const Tooltip(
+        message: 'Menunggu Konfirmasi',
+        child: Icon(Icons.hourglass_top_rounded, color: Colors.amber, size: 18),
+      );
+    }
+    return IconButton(
+      tooltip: status == FriendRelationStatus.pendingIncoming ? 'Terima Teman' : 'Tambah Teman',
+      constraints: const BoxConstraints(),
+      padding: const EdgeInsets.all(4),
+      icon: Icon(
+        Icons.person_add_alt_1_outlined,
+        color: status == FriendRelationStatus.pendingIncoming ? AppColors.accentGreen : AppColors.primaryOrange,
+        size: 19,
+      ),
+      onPressed: () => _addFriendFromEvent(attendee),
     );
   }
 }

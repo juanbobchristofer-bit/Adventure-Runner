@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/community_service.dart';
+import '../../../core/services/friends_service.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../domain/runner_stats.dart';
 
@@ -31,11 +32,13 @@ class ClubDetailScreen extends StatefulWidget {
 
 class _ClubDetailScreenState extends State<ClubDetailScreen> {
   final CommunityService _communityService = CommunityService();
+  final FriendsService _friendsService = FriendsService();
   final TextEditingController _chatCtrl = TextEditingController();
   final ScrollController _chatScrollCtrl = ScrollController();
 
   late OnlineClub _club;
   List<OnlineClubMember> _members = [];
+  Map<String, FriendItem> _friendRelations = {};
   List<ClubMessage> _messages = [];
   bool _loadingLeaderboard = true;
   bool _loadingChat = true;
@@ -71,14 +74,29 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
   Future<void> _loadLeaderboard() async {
     try {
       final list = await _communityService.fetchClubLeaderboard(_club.id);
+      final friendSnap = AuthService.isLoggedIn
+          ? await _friendsService.fetchFriendsSnapshot()
+          : const FriendsSnapshot(isAvailable: false);
       if (mounted) {
         setState(() {
           _members = list;
+          _friendRelations = friendSnap.relationByUserId;
           _loadingLeaderboard = false;
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loadingLeaderboard = false);
+    }
+  }
+
+  Future<void> _addFriendFromLeaderboard(OnlineClubMember member) async {
+    if (!await _ensureLoggedIn()) return;
+    try {
+      await _friendsService.sendFriendRequest(member.userId);
+      await _loadLeaderboard();
+      _showSnack('Permintaan pertemanan dikirim ke ${member.name}!');
+    } catch (e) {
+      _showSnack('Gagal menambah teman: $e', isError: true);
     }
   }
 
@@ -507,11 +525,44 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
                     color: m.isCurrentUser ? AppColors.primaryOrange : Colors.white,
                   ),
                 ),
+                if (!m.isCurrentUser) ...[
+                  const SizedBox(width: 6),
+                  _buildQuickFriendAction(m),
+                ],
               ],
             ),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildQuickFriendAction(OnlineClubMember member) {
+    final relation = _friendRelations[member.userId];
+    final status = relation?.status ?? FriendRelationStatus.none;
+
+    if (status == FriendRelationStatus.accepted) {
+      return const Tooltip(
+        message: 'Sudah Berteman',
+        child: Icon(Icons.how_to_reg, color: AppColors.accentGreen, size: 19),
+      );
+    }
+    if (status == FriendRelationStatus.pendingOutgoing) {
+      return const Tooltip(
+        message: 'Menunggu Konfirmasi',
+        child: Icon(Icons.hourglass_top_rounded, color: Colors.amber, size: 18),
+      );
+    }
+    return IconButton(
+      tooltip: status == FriendRelationStatus.pendingIncoming ? 'Terima Teman' : 'Tambah Teman',
+      constraints: const BoxConstraints(),
+      padding: const EdgeInsets.all(4),
+      icon: Icon(
+        Icons.person_add_alt_1_outlined,
+        color: status == FriendRelationStatus.pendingIncoming ? AppColors.accentGreen : AppColors.primaryOrange,
+        size: 19,
+      ),
+      onPressed: () => _addFriendFromLeaderboard(member),
     );
   }
 
