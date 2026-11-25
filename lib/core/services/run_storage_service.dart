@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -5,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../features/tracking/domain/run_model.dart';
 import '../utils/gpx_exporter.dart';
+import 'social_feed_service.dart';
 
 /// Repositori lokal untuk riwayat lari.
 /// Menyimpan indeks metadata & file trek GPS secara terpisah di disk (`runs_db/`) dengan penulisan atomik,
@@ -194,6 +196,7 @@ class RunStorageService {
       await _writeIndexFile(dbDir, currentRuns);
     }
     runUpdateNotifier.value++;
+    unawaited(SocialFeedService.publishRunToFeed(run));
   }
 
   Future<void> updateRun(RunModel updatedRun) async {
@@ -210,6 +213,7 @@ class RunStorageService {
         await _writeIndexFile(dbDir, currentRuns);
       }
       runUpdateNotifier.value++;
+      unawaited(SocialFeedService.publishRunToFeed(updatedRun));
     }
   }
 
@@ -236,6 +240,7 @@ class RunStorageService {
       await _writeIndexFile(dbDir, currentRuns);
     }
     runUpdateNotifier.value++;
+    unawaited(SocialFeedService.deletePublishedRun(id));
   }
 
   /// Menyalin foto aktivitas lari ke penyimpanan permanen aplikasi

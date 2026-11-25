@@ -2,10 +2,13 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/auth_service.dart';
 import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
+import '../../../core/services/social_feed_service.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/widgets/mini_route_painter.dart';
+import '../../auth/presentation/login_screen.dart';
 import '../domain/run_model.dart';
 import '../domain/runner_stats.dart';
 import 'run_detail_screen.dart';
@@ -20,11 +23,17 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final RunStorageService _storageService = RunStorageService();
   final ProfileStorageService _profileService = ProfileStorageService();
+  final SocialFeedService _socialFeedService = SocialFeedService();
 
   List<RunModel> _savedRuns = [];
   Set<String> _validPhotoRunIds = {};
   UserProfileData _profile = UserProfileData.defaultProfile;
   bool _isLoading = true;
+
+  // Feed Teman + Kudos
+  int _selectedFeedTab = 0; // 0 = Aktivitas Saya, 1 = Feed Teman
+  SocialFeedSnapshot _friendsFeed = const SocialFeedSnapshot(isAvailable: false);
+  bool _loadingFriendsFeed = false;
 
   @override
   void initState() {
@@ -32,12 +41,14 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadRunsAndProfile();
     ProfileStorageService.profileUpdateNotifier.addListener(_loadRunsAndProfile);
     RunStorageService.runUpdateNotifier.addListener(_loadRunsAndProfile);
+    AuthService.authStateNotifier.addListener(_loadRunsAndProfile);
   }
 
   @override
   void dispose() {
     ProfileStorageService.profileUpdateNotifier.removeListener(_loadRunsAndProfile);
     RunStorageService.runUpdateNotifier.removeListener(_loadRunsAndProfile);
+    AuthService.authStateNotifier.removeListener(_loadRunsAndProfile);
     super.dispose();
   }
 
@@ -57,6 +68,47 @@ class _HomeScreenState extends State<HomeScreen> {
         _profile = profile;
         _isLoading = false;
       });
+    }
+    if (_selectedFeedTab == 1) {
+      await _loadFriendsFeed();
+    }
+  }
+
+  Future<void> _loadFriendsFeed() async {
+    if (mounted) setState(() => _loadingFriendsFeed = true);
+    final snap = await _socialFeedService.fetchFriendsFeed();
+    if (mounted) {
+      setState(() {
+        _friendsFeed = snap;
+        _loadingFriendsFeed = false;
+      });
+    }
+  }
+
+  Future<void> _toggleKudos(SocialFeedPost post) async {
+    final idx = _friendsFeed.posts.indexWhere((p) => p.id == post.id);
+    if (idx == -1) return;
+
+    final nextGiven = !post.hasGivenKudos;
+    final nextCount = (post.kudosCount + (nextGiven ? 1 : -1)).clamp(0, 999999);
+    final updatedList = List<SocialFeedPost>.from(_friendsFeed.posts);
+    updatedList[idx] = post.copyWith(hasGivenKudos: nextGiven, kudosCount: nextCount);
+
+    setState(() {
+      _friendsFeed = SocialFeedSnapshot(
+        isAvailable: _friendsFeed.isAvailable,
+        posts: updatedList,
+      );
+    });
+
+    try {
+      await _socialFeedService.toggleKudos(
+        postId: post.id,
+        currentlyGiven: post.hasGivenKudos,
+      );
+    } catch (_) {
+      // Revert bila gagal
+      await _loadFriendsFeed();
     }
   }
 
@@ -187,29 +239,36 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SizedBox(height: 16),
                         _buildPerformanceChartCard(),
                         const SizedBox(height: 22),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Riwayat Aktivitas',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.white),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: AppColors.cardDark,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: Colors.white12),
+                        // Switcher Feed: Aktivitas Saya | Feed Teman
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: AppColors.cardDark,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: Colors.white10),
+                          ),
+                          child: Row(
+                            children: [
+                              _buildFeedModePill(
+                                label: 'Aktivitas Saya (${_savedRuns.length})',
+                                selected: _selectedFeedTab == 0,
+                                onTap: () => setState(() => _selectedFeedTab = 0),
                               ),
-                              child: Text(
-                                '${_savedRuns.length} Sesi',
-                                style: const TextStyle(color: AppColors.primaryOrange, fontSize: 12, fontWeight: FontWeight.w600),
+                              _buildFeedModePill(
+                                label: 'Feed Teman',
+                                selected: _selectedFeedTab == 1,
+                                onTap: () {
+                                  setState(() => _selectedFeedTab = 1);
+                                  _loadFriendsFeed();
+                                },
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                        const SizedBox(height: 12),
-                        if (_savedRuns.isEmpty)
+                        const SizedBox(height: 14),
+                        if (_selectedFeedTab == 1) ...[
+                          _buildFriendsFeedSection(),
+                        ] else if (_savedRuns.isEmpty)
                           _buildEmptyState()
                         else
                           ..._savedRuns.map((run) => Padding(
@@ -680,6 +739,275 @@ class _HomeScreenState extends State<HomeScreen> {
         const SizedBox(height: 3),
         Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
       ],
+    );
+  }
+
+  Widget _buildFeedModePill({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: selected ? AppColors.primaryOrange : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: selected ? Colors.white : AppColors.textSecondary,
+              fontWeight: FontWeight.bold,
+              fontSize: 12.5,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFriendsFeedSection() {
+    if (!AuthService.isLoggedIn) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.public, size: 42, color: AppColors.primaryOrange),
+            const SizedBox(height: 10),
+            const Text('Lihat Lari Teman & Beri Kudos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+            const SizedBox(height: 6),
+            const Text(
+              'Masuk akun untuk melihat aktivitas terbaru teman-teman Anda dan saling memberi Kudos (👏).',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+            ),
+            const SizedBox(height: 14),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () async {
+                final ok = await Navigator.push<bool>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                );
+                if (ok == true) _loadFriendsFeed();
+              },
+              child: const Text('Masuk Sekarang', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_loadingFriendsFeed) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 36),
+        child: Center(child: CircularProgressIndicator(color: AppColors.primaryOrange)),
+      );
+    }
+
+    if (!_friendsFeed.isAvailable) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.amber.withValues(alpha: 0.4)),
+        ),
+        child: Text(
+          _friendsFeed.statusMessage ?? 'Feed Teman belum tersedia.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.amber, fontSize: 12.5),
+        ),
+      );
+    }
+
+    if (_friendsFeed.posts.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 20),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: const Column(
+          children: [
+            Icon(Icons.people_outline, size: 42, color: AppColors.primaryOrange),
+            SizedBox(height: 10),
+            Text('Belum Ada Postingan Teman', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+            SizedBox(height: 6),
+            Text(
+              'Tambahkan teman di tab Grup → Teman, atau rekam larimu agar langsung tampil di Feed Komunitas!',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: _friendsFeed.posts.map((post) => _buildSocialPostCard(post)).toList(),
+    );
+  }
+
+  Widget _buildSocialPostCard(SocialFeedPost post) {
+    final dt = post.createdAt;
+    final dateText = '${dt.day}/${dt.month}/${dt.year} • ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: post.isMine ? AppColors.primaryOrange.withValues(alpha: 0.3) : Colors.white10,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: AppColors.cardElevated,
+                child: Text(
+                  post.authorName.trim().isNotEmpty ? post.authorName.trim()[0].toUpperCase() : '?',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            post.isMine ? '${post.authorName} (Anda)' : post.authorName,
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(5),
+                          ),
+                          child: Text(
+                            'Lv.${post.authorLevel}',
+                            style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Text('$dateText • ${post.authorCity}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(post.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white)),
+          if (post.feeling.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(post.feeling, style: const TextStyle(color: AppColors.primaryOrangeLight, fontSize: 11.5, fontWeight: FontWeight.w600)),
+          ],
+          if (post.notes.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(post.notes, style: const TextStyle(color: Colors.white70, fontSize: 13), maxLines: 3, overflow: TextOverflow.ellipsis),
+          ],
+          const SizedBox(height: 12),
+          Container(
+            height: 80,
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.backgroundDark,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: CustomPaint(
+                    size: const Size(double.infinity, 56),
+                    painter: MiniRoutePainter(post.routePreview),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '${post.calories.toStringAsFixed(0)} kcal${post.elevationGainM >= 1 ? '\n+${post.elevationGainM.round()} m' : ''}',
+                  textAlign: TextAlign.right,
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildCardStat('JARAK', '${post.distanceKm.toStringAsFixed(2)} km'),
+              _buildCardStat('PACE', '${post.pace} /km'),
+              _buildCardStat('DURASI', AppFormatters.formatCompactDuration(post.durationSeconds)),
+              InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => _toggleKudos(post),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  decoration: BoxDecoration(
+                    color: post.hasGivenKudos
+                        ? AppColors.primaryOrange.withValues(alpha: 0.22)
+                        : AppColors.cardElevated,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: post.hasGivenKudos ? AppColors.primaryOrange : Colors.white12,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        post.hasGivenKudos ? Icons.thumb_up_alt : Icons.thumb_up_alt_outlined,
+                        size: 15,
+                        color: post.hasGivenKudos ? AppColors.primaryOrange : Colors.white70,
+                      ),
+                      const SizedBox(width: 5),
+                      Text(
+                        '${post.kudosCount} Kudos',
+                        style: TextStyle(
+                          color: post.hasGivenKudos ? AppColors.primaryOrange : Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

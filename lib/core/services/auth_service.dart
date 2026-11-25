@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/tracking/domain/runner_stats.dart';
 import '../config/supabase_config.dart';
+import 'friends_service.dart';
 import 'profile_storage_service.dart';
 import 'run_storage_service.dart';
 
@@ -210,6 +211,7 @@ class AuthService {
     try {
       await client?.auth.signOut();
     } catch (_) {}
+    FriendsService.pendingRequestsCount.value = 0;
     authStateNotifier.value++;
   }
 

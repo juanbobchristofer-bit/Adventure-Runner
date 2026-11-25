@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/tracking/domain/runner_stats.dart';
@@ -68,6 +69,20 @@ class FriendsSnapshot {
 
 /// Service pertemanan antar-pelari berbasis Supabase (Add Friend, Terima/Tolak, Cari Pelari, & Leaderboard Teman).
 class FriendsService {
+  /// Notifier global jumlah permintaan pertemanan masuk untuk badge notifikasi di Nav Bar & Tab Teman
+  static final ValueNotifier<int> pendingRequestsCount = ValueNotifier<int>(0);
+
+  static Future<void> refreshPendingBadge() async {
+    if (!AuthService.isLoggedIn) {
+      pendingRequestsCount.value = 0;
+      return;
+    }
+    try {
+      final snap = await FriendsService().fetchFriendsSnapshot();
+      pendingRequestsCount.value = snap.incomingRequests.length;
+    } catch (_) {}
+  }
+
   RunnerProfileSummary _parseProfileMap(Map<String, dynamic> p, String currentWeekIso, String? currentUid) {
     final uid = p['id']?.toString() ?? '';
     final isCurrentWeek = p['week_start_iso']?.toString() == currentWeekIso;
@@ -111,6 +126,7 @@ class FriendsService {
       );
 
       if (rawRows.isEmpty) {
+        pendingRequestsCount.value = 0;
         return const FriendsSnapshot(isAvailable: true);
       }
 
@@ -190,6 +206,7 @@ class FriendsService {
       }
 
       accepted.sort((a, b) => b.profile.weeklyDistanceKm.compareTo(a.profile.weeklyDistanceKm));
+      pendingRequestsCount.value = incoming.length;
 
       return FriendsSnapshot(
         isAvailable: true,

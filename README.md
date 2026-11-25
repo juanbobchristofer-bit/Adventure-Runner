@@ -27,9 +27,9 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 *   **🔋 Background GPS & Smart Auto-Pause:** Uses Android Foreground Services and wake-locks to ensure uninterrupted tracking even when the phone is locked in your pocket. Features smart auto-pause that pauses telemetry when stationary.
 *   **🏃‍♂️ Strava-Like Activity Posting:** Post your runs with custom titles, personal notes/captions, mood/vibe tags (`feeling`), and photo documentation captured from your gallery or camera.
 *   **👟 Step Counting & Biometric Calories:** Integrates hardware pedometer streams and user weight metrics for precise calorie expenditure and cadence calculations.
-*   **📊 Post-Run Telemetry & Analysis:** Detailed split-per-kilometer breakdown, training intensity zones (Recovery, Aerobic, Tempo, Threshold), average speed, and one-tap summary copying for WhatsApp/Instagram.
+*   **📊 Post-Run Telemetry & Interactive Charts:** Elevation & Speed area charts (`TelemetryChartCard`), detailed split-per-kilometer breakdown, training intensity zones (Recovery, Aerobic, Tempo, Threshold), average speed, and one-tap summary copying for WhatsApp/Instagram.
 *   **🏆 Gamification & Profile System:** Unified XP & runner leveling (from runs + claimable challenge bonus XP), 8 unlockable milestone badges, personal best records, and editable user profiles.
-*   **👥 Online Community, Level Gating, Live Chat & Friends (Supabase):** Flexible authentication (Email/Password + Offline Guest Mode), level-gated Challenges with claimable XP rewards, level-gated Running Clubs with Live Weekly Leaderboards & Realtime Club Chat, level/quota-gated Community Events with Live Event Discussion, and a full Friends system (search runners, Add Friend, accept/decline, and Friends Weekly Leaderboard) with automatic offline fallback.
+*   **👥 Online Community, Friends Feed + Kudos, Level Gating & Live Chat (Supabase):** Flexible authentication (Email/Password + Offline Guest Mode), Strava-style Friends Activity Feed with Kudos (👏) & mini GPS route previews, unread friend-request notification badges, level-gated Challenges with claimable XP rewards, level-gated Running Clubs with Live Weekly Leaderboards & Realtime Club Chat, level/quota-gated Community Events with Live Event Discussion, and a full Friends system with automatic offline fallback.
 
 ---
 
@@ -64,13 +64,15 @@ lib/
 │   │   ├── offline_tile_provider.dart       # Offline-first disk caching for OSM map tiles
 │   │   ├── pedometer_service.dart           # Raw step counter stream handler
 │   │   ├── profile_storage_service.dart     # User profile, biometrics & bonus XP repository
-│   │   └── run_storage_service.dart         # Atomic file-based run DB, migration & GPX export
+│   │   ├── run_storage_service.dart         # Atomic file-based run DB, migration & GPX export
+│   │   └── social_feed_service.dart         # Friends Activity Feed & Kudos (Supabase)
 │   ├── utils/
 │   │   ├── formatters.dart                  # Shared clock & compact duration formatters
 │   │   └── gpx_exporter.dart                # Standard GPX 1.1 XML serializer
 │   └── widgets/
 │       ├── dark_osm_tile_layer.dart         # Reusable dark-mode OSM tile layer & attribution
-│       └── mini_route_painter.dart          # Lightweight mini GPS polyline canvas painter
+│       ├── mini_route_painter.dart          # Lightweight mini GPS polyline canvas painter
+│       └── telemetry_chart_card.dart        # Speed & Elevation interactive area chart
 └── features/
     ├── auth/
     │   └── presentation/
@@ -98,5 +100,6 @@ supabase/
 ├── migration_p1_challenges.sql              # Level gating & XP reward claim migration
 ├── migration_p2_clubs.sql                   # Club min_level & Realtime club_messages migration
 ├── migration_p3_events.sql                  # Event min_level, quota & Realtime event_messages migration
-└── migration_p4_friends.sql                 # Friendships table & RLS migration
+├── migration_p4_friends.sql                 # Friendships table & RLS migration
+└── migration_p5_social_feed.sql             # Friends Activity Feed & Kudos tables & RLS migration
 ```

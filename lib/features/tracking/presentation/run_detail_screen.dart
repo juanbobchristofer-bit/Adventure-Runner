@@ -11,6 +11,7 @@ import '../../../core/services/run_storage_service.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/utils/gpx_exporter.dart';
 import '../../../core/widgets/dark_osm_tile_layer.dart';
+import '../../../core/widgets/telemetry_chart_card.dart';
 import '../domain/run_model.dart';
 import '../domain/runner_stats.dart';
 
@@ -729,6 +730,10 @@ Judul: ${_run.title} (${_run.date})
                       ],
                     ),
                   ),
+
+                  // 3B. GRAFIK TELEMETRI (KECEPATAN & ELEVASI)
+                  const SizedBox(height: 18),
+                  TelemetryChartCard(run: _run, splits: splits),
 
                   // 4. ANALISIS SPLIT PER KILOMETER
                   if (splits.isNotEmpty) ...[

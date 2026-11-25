@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/community_service.dart';
+import '../../../core/services/friends_service.dart';
 import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
 import '../../auth/presentation/login_screen.dart';
@@ -1011,17 +1012,41 @@ class _GroupScreenState extends State<GroupScreen> {
               },
             ),
           ],
-          bottom: const TabBar(
+          bottom: TabBar(
             indicatorColor: AppColors.primaryOrange,
             indicatorWeight: 3,
             labelColor: AppColors.primaryOrange,
             unselectedLabelColor: AppColors.textSecondary,
-            labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+            labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
             tabs: [
-              Tab(text: 'Tantangan'),
-              Tab(text: 'Klub'),
-              Tab(text: 'Acara'),
-              Tab(text: 'Teman'),
+              const Tab(text: 'Tantangan'),
+              const Tab(text: 'Klub'),
+              const Tab(text: 'Acara'),
+              Tab(
+                child: ValueListenableBuilder<int>(
+                  valueListenable: FriendsService.pendingRequestsCount,
+                  builder: (_, count, __) => Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text('Teman'),
+                      if (count > 0) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: Colors.redAccent,
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: Text(
+                            count > 9 ? '9+' : '$count',
+                            style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
