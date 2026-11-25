@@ -15,7 +15,7 @@ A modern, gamified, offline-first running tracking mobile application inspired b
 
 ## 📱 About The Project
 
-**Adventure Runner** is an endurance and fitness tracking application designed for runners who prefer complete data privacy and 100% offline functionality. It leverages device sensors (GPS and pedometer) to record workouts, calculate accurate paces, estimate calorie burn based on user biometrics, and sync everything locally using `SharedPreferences`.
+**Adventure Runner** is an endurance and fitness tracking application designed for runners who prioritize data privacy and offline-first reliability. It leverages device sensors (GPS and pedometer) to record workouts, calculate accurate paces and per-kilometer splits, estimate calorie burn based on user biometrics, cache visited OpenStreetMap tiles locally on disk for offline map viewing, and persist all activity history locally using `SharedPreferences`.
 
 Featuring a dark-themed athletic UI, gamification elements (XP leveling, achievements, personal records), and simulated offline social clubs, Adventure Runner brings the full community workout experience directly to your device without requiring cloud servers.
 
@@ -39,9 +39,9 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 *   **Language:** Dart
 *   **Geospatial & Mapping:** `flutter_map`, `latlong2`, `geolocator`
 *   **Sensors:** `pedometer`, `permission_handler`
-*   **Local Storage:** `shared_preferences`, `path_provider`
+*   **Local Storage:** Atomic file-based JSON repository (`path_provider` + per-run GPS track files + GPX 1.1 export) & `shared_preferences`
 *   **Media Handling:** `image_picker`
-*   **State Management:** Stateful Architecture with Service-Locator patterns and reactive `ValueNotifier` hooks.
+*   **State Management:** Lightweight reactive `ValueNotifier` architecture across tabs & services.
 
 ---
 
@@ -49,22 +49,36 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 
 ```text
 lib/
+├── main.dart
 ├── core/
 │   ├── constants/
-│   │   └── app_colors.dart          # Custom dark athletic color palette
-│   └── services/
-│       ├── location_service.dart    # Background GPS & foreground config
-│       ├── pedometer_service.dart   # Step counter stream handler
-│       ├── profile_storage.dart     # User profile & biometrics repository
-│       └── run_storage_service.dart # JSON serialization & local run persistence
+│   │   └── app_colors.dart                  # Custom dark athletic color palette
+│   ├── services/
+│   │   ├── location_service.dart            # Background GPS & foreground config (Android/iOS)
+│   │   ├── offline_tile_provider.dart       # Offline-first disk caching for OSM map tiles
+│   │   ├── pedometer_service.dart           # Raw step counter stream handler
+│   │   ├── profile_storage_service.dart     # User profile & biometrics repository
+│   │   └── run_storage_service.dart         # Atomic file-based run DB, migration & GPX export
+│   ├── utils/
+│   │   ├── formatters.dart                  # Shared clock & compact duration formatters
+│   │   └── gpx_exporter.dart                # Standard GPX 1.1 XML serializer
+│   └── widgets/
+│       ├── dark_osm_tile_layer.dart         # Reusable dark-mode OSM tile layer & attribution
+│       └── mini_route_painter.dart          # Lightweight mini GPS polyline canvas painter
 └── features/
     └── tracking/
+        ├── data/
+        │   └── community_seed_data.dart     # Curated local challenges, clubs & events data
         ├── domain/
-        │   └── run_model.dart       # Core data model for workouts
+        │   ├── run_model.dart               # Core workout & GPS trackpoint data model
+        │   └── runner_stats.dart            # Unified XP, rank, weekly distance & split telemetry
         └── presentation/
-            ├── home_screen.dart         # Dashboard, stats & activity feed
-            ├── record_run_screen.dart   # Live tracking, countdown & post screen
-            ├── map_screen.dart          # Route explorer & filter view
-            ├── group_screen.dart        # Offline clubs, leaderboards & events
-            ├── profile_screen.dart      # User stats, level, badges & settings
-            └── run_detail_screen.dart   # Deep telemetry, splits & share summary
+            ├── main_navigation_screen.dart  # 5-tab navigation shell & guided route switcher
+            ├── home_screen.dart             # Dashboard, weekly goal & activity feed
+            ├── record_run_screen.dart       # Live tracking, auto-pause & guided route overlay
+            ├── post_run_screen.dart         # Post-run caption, feeling, photo & save flow
+            ├── map_explore_screen.dart      # Route explorer & filter view
+            ├── group_screen.dart            # Offline clubs, weekly leaderboards & events
+            ├── profile_screen.dart          # User stats, level, badges & offline cache settings
+            └── run_detail_screen.dart       # Telemetry, actual splits, edit activity & GPX export
+```

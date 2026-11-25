@@ -1,0 +1,6 @@
+# Salin file ini menjadi android/key.properties lalu isi dengan kredensial keystore rilis Anda.
+# Jangan pernah meng-commit android/key.properties atau file .jks/.keystore ke Git.
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=upload
+storeFile=../upload-keystore.jks

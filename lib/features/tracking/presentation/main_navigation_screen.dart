@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
+import '../domain/runner_stats.dart';
 import 'home_screen.dart';
 import 'map_explore_screen.dart';
 import 'record_run_screen.dart';
@@ -23,6 +24,26 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     GroupScreen(),     // Tab Komunitas & Grup
     ProfileScreen(),   // Tab Profil / Anda
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    GuidedRouteController.tabNavigationRequest.addListener(_handleTabRequest);
+  }
+
+  @override
+  void dispose() {
+    GuidedRouteController.tabNavigationRequest.removeListener(_handleTabRequest);
+    super.dispose();
+  }
+
+  void _handleTabRequest() {
+    final targetTab = GuidedRouteController.tabNavigationRequest.value;
+    if (targetTab != null && targetTab >= 0 && targetTab < _screens.length) {
+      setState(() => _currentIndex = targetTab);
+      GuidedRouteController.tabNavigationRequest.value = null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -1,11 +1,12 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/services/run_storage_service.dart';
-import 'record_run_screen.dart';
+import '../../../core/widgets/dark_osm_tile_layer.dart';
+import '../domain/runner_stats.dart';
 
 class ExploreRoute {
   final String id;
@@ -135,10 +136,12 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
   void initState() {
     super.initState();
     _loadUserSavedRoutes();
+    RunStorageService.runUpdateNotifier.addListener(_loadUserSavedRoutes);
   }
 
   @override
   void dispose() {
+    RunStorageService.runUpdateNotifier.removeListener(_loadUserSavedRoutes);
     _searchController.dispose();
     super.dispose();
   }
@@ -150,10 +153,10 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
       return ExploreRoute(
         id: r.id,
         name: r.title,
-        location: 'Rekaman Saya • ${r.date}',
+        location: 'Rekaman Saya â€¢ ${r.date}',
         category: 'Rute Saya',
         distanceKm: r.distanceInKm,
-        elevationGainM: (r.distanceInKm * 12).round(),
+        elevationGainM: r.elevationGainM.round(),
         surface: 'GPS Recorded',
         difficulty: 'Riwayat',
         color: Colors.amberAccent,
@@ -262,7 +265,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: route.color.withOpacity(0.2),
+                    color: route.color.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
@@ -305,9 +308,13 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                 ),
                 onPressed: () {
                   Navigator.pop(ctx);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const RecordRunScreen()),
+                  GuidedRouteController.startGuidedRun(
+                    GuidedRoute(
+                      name: route.name,
+                      distanceKm: route.distanceKm,
+                      color: route.color,
+                      points: route.points,
+                    ),
                   );
                 },
                 icon: const Icon(Icons.play_arrow_rounded, color: Colors.white),
@@ -348,23 +355,10 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
             options: const MapOptions(
               initialCenter: LatLng(-6.9311, 107.7733), // Kawasan Jatinangor / Sumedang
               initialZoom: 14.0,
+              backgroundColor: AppColors.backgroundDark,
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.adventure_runner',
-                tileBuilder: (context, tileWidget, tile) {
-                  return ColorFiltered(
-                    colorFilter: const ColorFilter.matrix([
-                      -1.0,  0.0,  0.0, 0.0, 255.0,
-                       0.0, -1.0,  0.0, 0.0, 255.0,
-                       0.0,  0.0, -1.0, 0.0, 255.0,
-                       0.0,  0.0,  0.0, 1.0,   0.0,
-                    ]),
-                    child: tileWidget,
-                  );
-                },
-              ),
+              const DarkOsmTileLayer(),
 
               // Gambar semua jalur rute yang lolos filter
               PolylineLayer(
@@ -374,7 +368,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                   return Polyline(
                     points: r.points,
                     strokeWidth: isSelected ? 6.0 : 3.5,
-                    color: isSelected ? r.color : r.color.withOpacity(0.45),
+                    color: isSelected ? r.color : r.color.withValues(alpha: 0.45),
                   );
                 }),
               ),
@@ -439,7 +433,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14),
                   decoration: BoxDecoration(
-                    color: AppColors.cardDark.withOpacity(0.95),
+                    color: AppColors.cardDark.withValues(alpha: 0.95),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(color: Colors.white12),
                     boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 10)],
@@ -490,7 +484,12 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
             ),
           ),
 
-          // 3. TOMBOL GPS LOKASI SAYA (FLOATING RIGHT)
+          // 3. ATRIBUSI OSM & TOMBOL GPS LOKASI SAYA (FLOATING)
+          const Positioned(
+            left: 16,
+            bottom: 185,
+            child: OsmAttributionBadge(),
+          ),
           Positioned(
             right: 16,
             bottom: 185,
@@ -519,7 +518,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                     margin: const EdgeInsets.symmetric(horizontal: 16),
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: AppColors.cardDark.withOpacity(0.95),
+                      color: AppColors.cardDark.withValues(alpha: 0.95),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: Colors.white12),
                     ),
@@ -552,7 +551,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                           margin: const EdgeInsets.only(right: 12),
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: AppColors.cardDark.withOpacity(0.96),
+                            color: AppColors.cardDark.withValues(alpha: 0.96),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
                               color: isSelected ? route.color : Colors.white12,
@@ -570,7 +569,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                                   Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                                     decoration: BoxDecoration(
-                                      color: route.color.withOpacity(0.2),
+                                      color: route.color.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(6),
                                     ),
                                     child: Text(
@@ -607,7 +606,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    '${route.location} • +${route.elevationGainM}m',
+                                    '${route.location} â€¢ +${route.elevationGainM}m',
                                     style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -667,7 +666,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
         margin: const EdgeInsets.only(right: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primaryOrange : AppColors.cardDark.withOpacity(0.95),
+          color: isSelected ? AppColors.primaryOrange : AppColors.cardDark.withValues(alpha: 0.95),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: isSelected ? AppColors.primaryOrange : Colors.white12),
         ),

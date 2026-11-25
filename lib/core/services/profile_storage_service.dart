@@ -10,6 +10,7 @@ class UserProfileData {
   final double weightKg;
   final double weeklyGoalKm;
   final String? avatarPath;
+  final int bonusXp;
 
   const UserProfileData({
     required this.name,
@@ -18,7 +19,17 @@ class UserProfileData {
     required this.weightKg,
     required this.weeklyGoalKm,
     this.avatarPath,
+    this.bonusXp = 0,
   });
+
+  static const UserProfileData defaultProfile = UserProfileData(
+    name: 'Pelari Adventure',
+    bio: 'Chasing new personal records every mile.',
+    city: 'Jatinangor, Indonesia',
+    weightKg: 65.0,
+    weeklyGoalKm: 15.0,
+    bonusXp: 0,
+  );
 }
 
 class ProfileStorageService {
@@ -28,6 +39,7 @@ class ProfileStorageService {
   static const String _keyWeight = 'user_profile_weight';
   static const String _keyGoal = 'user_weekly_goal_km';
   static const String _keyAvatarPath = 'user_profile_avatar_path';
+  static const String _keyBonusXp = 'user_bonus_xp';
 
   /// Notifier global agar perubahan di halaman Profil langsung memperbarui HomeScreen
   static final ValueNotifier<int> profileUpdateNotifier = ValueNotifier<int>(0);
@@ -37,13 +49,18 @@ class ProfileStorageService {
     final savedAvatar = prefs.getString(_keyAvatarPath);
     final validAvatar = (savedAvatar != null && File(savedAvatar).existsSync()) ? savedAvatar : null;
 
+    final rawWeight = prefs.getDouble(_keyWeight);
+    final rawGoal = prefs.getDouble(_keyGoal);
+    final rawBonusXp = prefs.getInt(_keyBonusXp) ?? 0;
+
     return UserProfileData(
       name: prefs.getString(_keyName) ?? 'Pelari Adventure',
       bio: prefs.getString(_keyBio) ?? 'Chasing new personal records every mile.',
       city: prefs.getString(_keyCity) ?? 'Jatinangor, Indonesia',
-      weightKg: prefs.getDouble(_keyWeight) ?? 65.0,
-      weeklyGoalKm: prefs.getDouble(_keyGoal) ?? 15.0,
+      weightKg: (rawWeight != null && rawWeight > 0) ? rawWeight : 65.0,
+      weeklyGoalKm: (rawGoal != null && rawGoal > 0) ? rawGoal : 15.0,
       avatarPath: validAvatar,
+      bonusXp: rawBonusXp < 0 ? 0 : rawBonusXp,
     );
   }
 
@@ -67,6 +84,28 @@ class ProfileStorageService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_keyGoal, goalKm);
     profileUpdateNotifier.value++;
+  }
+
+  /// Menambahkan Bonus XP dari klaim hadiah tantangan/acara
+  Future<int> addBonusXp(int amount) async {
+    if (amount <= 0) return (await getProfile()).bonusXp;
+    final prefs = await SharedPreferences.getInstance();
+    final current = prefs.getInt(_keyBonusXp) ?? 0;
+    final updated = current + amount;
+    await prefs.setInt(_keyBonusXp, updated);
+    profileUpdateNotifier.value++;
+    return updated;
+  }
+
+  /// Menyelaraskan Bonus XP dari cloud (mengambil nilai maksimum agar progres tidak pernah hilang)
+  Future<void> mergeBonusXpFromCloud(int cloudBonusXp) async {
+    if (cloudBonusXp <= 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final current = prefs.getInt(_keyBonusXp) ?? 0;
+    if (cloudBonusXp > current) {
+      await prefs.setInt(_keyBonusXp, cloudBonusXp);
+      profileUpdateNotifier.value++;
+    }
   }
 
   /// Menyalin foto pilihan user ke direktori permanen aplikasi agar tidak hilang saat cache HP dibersihkan

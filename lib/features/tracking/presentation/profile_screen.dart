@@ -1,11 +1,17 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/auth_service.dart';
+import '../../../core/services/location_service.dart';
+import '../../../core/services/offline_tile_provider.dart';
 import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
+import '../../../core/utils/formatters.dart';
+import '../../auth/presentation/login_screen.dart';
 import '../domain/run_model.dart';
+import '../domain/runner_stats.dart';
 
 class _AchievementBadge {
   final String title;
@@ -33,16 +39,13 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final RunStorageService _storageService = RunStorageService();
   final ProfileStorageService _profileService = ProfileStorageService();
+  final LocationService _locationService = LocationService();
   final ImagePicker _picker = ImagePicker();
 
   List<RunModel> _savedRuns = [];
-  UserProfileData _profile = const UserProfileData(
-    name: 'Pelari Adventure',
-    bio: 'Chasing new personal records every mile.',
-    city: 'Jatinangor, Indonesia',
-    weightKg: 65.0,
-    weeklyGoalKm: 15.0,
-  );
+  OfflineCacheStats _cacheStats = const OfflineCacheStats(tileCount: 0, totalBytes: 0);
+  bool _hasBackgroundGps = false;
+  UserProfileData _profile = UserProfileData.defaultProfile;
   bool _isLoading = true;
 
   @override
@@ -50,11 +53,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.initState();
     _loadUserData();
     ProfileStorageService.profileUpdateNotifier.addListener(_onExternalProfileUpdate);
+    RunStorageService.runUpdateNotifier.addListener(_onExternalProfileUpdate);
+    AuthService.authStateNotifier.addListener(_onExternalProfileUpdate);
   }
 
   @override
   void dispose() {
     ProfileStorageService.profileUpdateNotifier.removeListener(_onExternalProfileUpdate);
+    RunStorageService.runUpdateNotifier.removeListener(_onExternalProfileUpdate);
+    AuthService.authStateNotifier.removeListener(_onExternalProfileUpdate);
     super.dispose();
   }
 
@@ -65,13 +72,72 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadUserData() async {
     final profile = await _profileService.getProfile();
     final runs = await _storageService.getSavedRuns();
+    final cacheStats = await OfflineTileCacheService.getCacheStats();
+    final hasBgGps = await _locationService.isBackgroundPermissionGranted();
 
     if (mounted) {
       setState(() {
         _profile = profile;
         _savedRuns = runs;
+        _cacheStats = cacheStats;
+        _hasBackgroundGps = hasBgGps;
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _confirmClearMapCache() async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppColors.cardDark,
+            title: const Text('Bersihkan Cache Peta?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: const Text(
+              'Tile peta offline yang tersimpan akan dihapus dan akan diunduh ulang saat Anda membuka peta secara online.',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Batal', style: TextStyle(color: Colors.grey)),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Bersihkan', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) return;
+    await OfflineTileCacheService.clearCache();
+    await _loadUserData();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cache peta offline berhasil dibersihkan.'),
+          backgroundColor: AppColors.cardElevated,
+        ),
+      );
+    }
+  }
+
+  Future<void> _enableBackgroundGps() async {
+    final granted = await _locationService.requestBackgroundPermission();
+    await _loadUserData();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            granted
+                ? 'Izin GPS latar belakang aktif! Pelacakan tetap stabil saat layar terkunci.'
+                : 'Izin lokasi "Selalu Izinkan" belum aktif. Anda dapat mengaturnya di Pengaturan perangkat.',
+          ),
+          backgroundColor: AppColors.cardElevated,
+        ),
+      );
     }
   }
 
@@ -179,7 +245,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final weightCtrl = TextEditingController(text: _profile.weightKg.toStringAsFixed(0));
     final goalCtrl = TextEditingController(text: _profile.weeklyGoalKm.toStringAsFixed(0));
 
-    showDialog(
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.cardDark,
@@ -218,16 +284,44 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
             onPressed: () async {
               final newName = nameCtrl.text.trim();
-              if (newName.isNotEmpty) {
-                await _profileService.saveProfile(
-                  name: newName,
-                  bio: bioCtrl.text.isEmpty ? _profile.bio : bioCtrl.text,
-                  city: cityCtrl.text.isEmpty ? _profile.city : cityCtrl.text,
-                  weightKg: double.tryParse(weightCtrl.text) ?? _profile.weightKg,
-                  weeklyGoalKm: double.tryParse(goalCtrl.text) ?? _profile.weeklyGoalKm,
-                );
-                await _loadUserData();
+              final parsedWeight = double.tryParse(weightCtrl.text.replaceAll(',', '.').trim());
+              final parsedGoal = double.tryParse(goalCtrl.text.replaceAll(',', '.').trim());
+
+              if (newName.isEmpty) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Nama tidak boleh kosong.'), backgroundColor: Colors.redAccent),
+                  );
+                }
+                return;
               }
+
+              if (parsedWeight == null || parsedWeight < 20 || parsedWeight > 300) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Berat badan harus antara 20 - 300 kg.'), backgroundColor: Colors.redAccent),
+                  );
+                }
+                return;
+              }
+
+              if (parsedGoal == null || parsedGoal <= 0 || parsedGoal > 1000) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Target jarak harus antara 1 - 1000 km.'), backgroundColor: Colors.redAccent),
+                  );
+                }
+                return;
+              }
+
+              await _profileService.saveProfile(
+                name: newName,
+                bio: bioCtrl.text.trim().isEmpty ? _profile.bio : bioCtrl.text.trim(),
+                city: cityCtrl.text.trim().isEmpty ? _profile.city : cityCtrl.text.trim(),
+                weightKg: parsedWeight,
+                weeklyGoalKm: parsedGoal,
+              );
+              await _loadUserData();
               if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Simpan', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -235,12 +329,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ],
       ),
     );
+
+    nameCtrl.dispose();
+    bioCtrl.dispose();
+    cityCtrl.dispose();
+    weightCtrl.dispose();
+    goalCtrl.dispose();
   }
 
   Widget _buildDialogField(TextEditingController controller, String label, IconData icon, {bool isNumber = false}) {
     return TextField(
       controller: controller,
-      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+      keyboardType: isNumber ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.text,
       style: const TextStyle(color: Colors.white, fontSize: 14),
       decoration: InputDecoration(
         labelText: label,
@@ -253,10 +353,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // --- KALKULASI STATISTIK & GAMIFIKASI ---
-  double get _totalDistance => _savedRuns.fold(0.0, (sum, item) => sum + item.distanceInKm);
-  int get _totalSeconds => _savedRuns.fold(0, (sum, item) => sum + item.durationInSeconds);
-  double get _totalCalories => _savedRuns.fold(0.0, (sum, item) => sum + item.calories);
+  // --- KALKULASI STATISTIK & GAMIFIKASI (TERPADU VIA RunnerStats) ---
+  double get _totalDistance => RunnerStats.totalDistance(_savedRuns);
+  double get _totalCalories => RunnerStats.totalCalories(_savedRuns);
   int get _totalSteps => _savedRuns.fold(0, (sum, item) => sum + item.steps);
 
   double get _longestRunKm =>
@@ -265,17 +364,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int get _longestDurationSec =>
       _savedRuns.isEmpty ? 0 : _savedRuns.map((r) => r.durationInSeconds).reduce(math.max);
 
-  // Sistem XP: 100 XP per km + 50 XP per sesi selesai
-  int get _totalXp => (_totalDistance * 100).round() + (_savedRuns.length * 50);
-  int get _runnerLevel => (_totalXp ~/ 500) + 1;
-  double get _levelProgress => (_totalXp % 500) / 500.0;
-
-  String get _rankTitle {
-    if (_runnerLevel >= 10) return 'ELITE MARATHONER';
-    if (_runnerLevel >= 6) return 'TRAIL CONQUEROR';
-    if (_runnerLevel >= 3) return 'CITY PACER';
-    return 'ROOKIE RUNNER';
-  }
+  int get _totalXp => RunnerStats.totalXp(_savedRuns, bonusXp: _profile.bonusXp);
+  int get _runnerLevel => RunnerStats.runnerLevel(_savedRuns, bonusXp: _profile.bonusXp);
+  double get _levelProgress => RunnerStats.levelProgress(_savedRuns, bonusXp: _profile.bonusXp);
+  String get _rankTitle => RunnerStats.rankTitle(_savedRuns, bonusXp: _profile.bonusXp);
 
   List<_AchievementBadge> get _badges => [
         _AchievementBadge(
@@ -315,7 +407,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         _AchievementBadge(
           title: 'Endurance 30m',
-          subtitle: 'Lari durasi ≥ 30 menit',
+          subtitle: 'Lari durasi â‰¥ 30 menit',
           icon: Icons.timer,
           color: Colors.purpleAccent,
           unlocked: _longestDurationSec >= 1800,
@@ -336,13 +428,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ];
 
-  String _formatDuration(int seconds) {
-    final h = seconds ~/ 3600;
-    final m = (seconds % 3600) ~/ 60;
-    if (h == 0) return '${m}m';
-    return '${h}j ${m}m';
-  }
-
   @override
   Widget build(BuildContext context) {
     final badges = _badges;
@@ -351,7 +436,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
       appBar: AppBar(
-        title: const Text('ANDA • PROFIL', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2, fontSize: 16)),
+        title: const Text('ANDA â€¢ PROFIL', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2, fontSize: 16)),
         backgroundColor: AppColors.backgroundDark,
         elevation: 0,
         actions: [
@@ -398,7 +483,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       Expanded(
                         child: _buildRecordCard(
                           'Durasi Terlama',
-                          _formatDuration(_longestDurationSec),
+                          AppFormatters.formatCompactDuration(_longestDurationSec),
                           Icons.hourglass_bottom,
                           AppColors.accentBlue,
                         ),
@@ -456,9 +541,219 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     itemBuilder: (context, index) => _buildBadgeTile(badges[index]),
                   ),
+                  const SizedBox(height: 24),
+
+                  // 6. PENGATURAN AKUN ONLINE, OFFLINE & SENSOR
+                  const Text(
+                    'Akun Komunitas & Pengaturan Offline',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                  ),
+                  const SizedBox(height: 10),
+                  _buildAccountSyncCard(),
+                  const SizedBox(height: 12),
+                  _buildOfflineAndPermissionCard(),
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildAccountSyncCard() {
+    final isLoggedIn = AuthService.isLoggedIn;
+    final email = AuthService.userEmail ?? 'Belum masuk akun';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isLoggedIn ? AppColors.accentGreen.withValues(alpha: 0.4) : Colors.white10,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: (isLoggedIn ? AppColors.accentGreen : AppColors.primaryOrange).withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              isLoggedIn ? Icons.cloud_done_outlined : Icons.login_rounded,
+              color: isLoggedIn ? AppColors.accentGreen : AppColors.primaryOrange,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isLoggedIn ? 'Akun Komunitas Aktif' : 'Mode Tamu (Offline)',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isLoggedIn ? email : 'Masuk untuk ikut Klub, Acara & Leaderboard online',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          if (isLoggedIn) ...[
+            IconButton(
+              tooltip: 'Sinkron ke Cloud',
+              icon: const Icon(Icons.sync, color: AppColors.accentGreen, size: 20),
+              onPressed: () async {
+                final ok = await AuthService.syncLocalStatsToCloud();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(ok ? 'Statistik berhasil disinkronkan ke cloud!' : 'Gagal sinkron. Periksa internet atau tabel Supabase.'),
+                      backgroundColor: AppColors.cardElevated,
+                    ),
+                  );
+                }
+              },
+            ),
+            TextButton(
+              onPressed: () async {
+                await AuthService.signOut();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Anda keluar ke Mode Tamu (Offline). Data lokal tetap aman.'),
+                      backgroundColor: AppColors.cardElevated,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Keluar', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+          ] else
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                minimumSize: Size.zero,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                );
+                await _loadUserData();
+              },
+              child: const Text('Masuk', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOfflineAndPermissionCard() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: AppColors.accentBlue.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.offline_pin_outlined, color: AppColors.accentBlue, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Cache Peta Offline (OSM)',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${_cacheStats.tileCount} tile tersimpan â€¢ ${OfflineTileCacheService.formatBytes(_cacheStats.totalBytes)}',
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: _cacheStats.tileCount > 0 ? _confirmClearMapCache : null,
+                child: Text(
+                  'Bersihkan',
+                  style: TextStyle(
+                    color: _cacheStats.tileCount > 0 ? AppColors.primaryOrange : Colors.white24,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const Divider(color: Colors.white10, height: 22),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: (_hasBackgroundGps ? AppColors.accentGreen : Colors.amber).withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  Icons.my_location,
+                  color: _hasBackgroundGps ? AppColors.accentGreen : Colors.amber,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'GPS Latar Belakang',
+                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _hasBackgroundGps
+                          ? 'Aktif (Always) â€¢ Stabil saat layar terkunci'
+                          : 'Belum aktif penuh â€¢ Ketuk untuk mengizinkan',
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                    ),
+                  ],
+                ),
+              ),
+              if (!_hasBackgroundGps)
+                TextButton(
+                  onPressed: _enableBackgroundGps,
+                  child: const Text(
+                    'Aktifkan',
+                    style: TextStyle(color: AppColors.primaryOrange, fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                )
+              else
+                const Icon(Icons.check_circle, color: AppColors.accentGreen, size: 20),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -474,7 +769,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.primaryOrange.withOpacity(0.35)),
+        border: Border.all(color: AppColors.primaryOrange.withValues(alpha: 0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -525,7 +820,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: AppColors.primaryOrange.withOpacity(0.2),
+                        color: AppColors.primaryOrange.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
@@ -579,7 +874,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const Spacer(),
               TextButton.icon(
                 style: TextButton.styleFrom(
-                  backgroundColor: AppColors.primaryOrange.withOpacity(0.15),
+                  backgroundColor: AppColors.primaryOrange.withValues(alpha: 0.15),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 ),
@@ -653,6 +948,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primaryOrange),
             ),
           ),
+          if (_profile.bonusXp > 0) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Termasuk +${_profile.bonusXp} XP dari klaim hadiah tantangan',
+              style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ],
         ],
       ),
     );
@@ -664,14 +966,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       decoration: BoxDecoration(
         color: AppColors.cardDark,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: accent.withOpacity(0.3)),
+        border: Border.all(color: accent.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(9),
             decoration: BoxDecoration(
-              color: accent.withOpacity(0.16),
+              color: accent.withValues(alpha: 0.16),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon, color: accent, size: 20),
@@ -722,10 +1024,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: badge.unlocked ? AppColors.cardDark : AppColors.cardDark.withOpacity(0.45),
+        color: badge.unlocked ? AppColors.cardDark : AppColors.cardDark.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: badge.unlocked ? badge.color.withOpacity(0.5) : Colors.white10,
+          color: badge.unlocked ? badge.color.withValues(alpha: 0.5) : Colors.white10,
         ),
       ),
       child: Column(
@@ -738,7 +1040,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Container(
                 padding: const EdgeInsets.all(7),
                 decoration: BoxDecoration(
-                  color: badge.unlocked ? badge.color.withOpacity(0.2) : Colors.white10,
+                  color: badge.unlocked ? badge.color.withValues(alpha: 0.2) : Colors.white10,
                   shape: BoxShape.circle,
                 ),
                 child: Icon(

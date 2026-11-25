@@ -26,6 +26,20 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Adventure Runner memerlukan akses lokasi untuk melacak rute lari, jarak, dan pace secara real-time.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Adventure Runner memerlukan akses lokasi di latar belakang agar pelacakan GPS tetap aktif saat layar terkunci.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Adventure Runner memerlukan akses sensor gerak untuk menghitung jumlah langkah dan kadensi lari Anda.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Adventure Runner memerlukan akses kamera untuk mengambil foto profil atau dokumentasi aktivitas lari.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Adventure Runner memerlukan akses galeri untuk memilih foto profil atau foto momen lari Anda.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

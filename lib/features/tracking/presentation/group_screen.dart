@@ -1,97 +1,17 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/auth_service.dart';
+import '../../../core/services/community_service.dart';
 import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
+import '../../auth/presentation/login_screen.dart';
+import '../data/community_seed_data.dart';
 import '../domain/run_model.dart';
-
-class _ChallengeItem {
-  final String id;
-  final String title;
-  final String description;
-  final String badgeText;
-  final double targetValue;
-  final String unit; // 'km', 'single_km', 'runs', 'kcal'
-  final int baseParticipants;
-  final IconData icon;
-  final Color accentColor;
-
-  const _ChallengeItem({
-    required this.id,
-    required this.title,
-    required this.description,
-    required this.badgeText,
-    required this.targetValue,
-    required this.unit,
-    required this.baseParticipants,
-    required this.icon,
-    required this.accentColor,
-  });
-}
-
-class _ClubMember {
-  final String name;
-  final double weeklyKm;
-  final int runsCount;
-  final bool isCurrentUser;
-  final String? avatarPath;
-
-  const _ClubMember({
-    required this.name,
-    required this.weeklyKm,
-    required this.runsCount,
-    this.isCurrentUser = false,
-    this.avatarPath,
-  });
-}
-
-class _RunningClub {
-  final String id;
-  final String name;
-  final String location;
-  final String description;
-  final String schedule;
-  final int baseMembers;
-  final IconData icon;
-  final Color color;
-  final List<_ClubMember> simulatedMembers;
-
-  const _RunningClub({
-    required this.id,
-    required this.name,
-    required this.location,
-    required this.description,
-    required this.schedule,
-    required this.baseMembers,
-    required this.icon,
-    required this.color,
-    required this.simulatedMembers,
-  });
-}
-
-class _CommunityEvent {
-  final String id;
-  final String title;
-  final String dateStr;
-  final String location;
-  final String distanceTag;
-  final String paceGroup;
-  final String description;
-  final int baseAttendees;
-
-  const _CommunityEvent({
-    required this.id,
-    required this.title,
-    required this.dateStr,
-    required this.location,
-    required this.distanceTag,
-    required this.paceGroup,
-    required this.description,
-    required this.baseAttendees,
-  });
-}
+import '../domain/runner_stats.dart';
 
 class GroupScreen extends StatefulWidget {
   const GroupScreen({super.key});
@@ -103,167 +23,47 @@ class GroupScreen extends StatefulWidget {
 class _GroupScreenState extends State<GroupScreen> {
   final RunStorageService _runService = RunStorageService();
   final ProfileStorageService _profileService = ProfileStorageService();
+  final CommunityService _communityService = CommunityService();
 
   static const String _prefJoinedChallenges = 'joined_challenges_ids';
+  static const String _prefClaimedChallenges = 'claimed_challenges_ids';
   static const String _prefJoinedClubs = 'joined_clubs_ids';
   static const String _prefRsvpEvents = 'rsvp_events_ids';
 
   List<RunModel> _savedRuns = [];
-  UserProfileData _profile = const UserProfileData(
-    name: 'Pelari Adventure',
-    bio: '',
-    city: 'Jatinangor, Indonesia',
-    weightKg: 65.0,
-    weeklyGoalKm: 15.0,
-  );
+  UserProfileData _profile = UserProfileData.defaultProfile;
 
-  Set<String> _joinedChallengeIds = {};
-  Set<String> _joinedClubIds = {};
-  Set<String> _rsvpEventIds = {};
+  // Data online (Supabase)
+  bool _isOnlineMode = false;
+  bool _needsSchemaSetup = false;
+  String? _statusMessage;
+  List<OnlineChallenge> _onlineChallenges = [];
+  List<OnlineClub> _onlineClubs = [];
+  List<OnlineEvent> _onlineEvents = [];
+
+  // Fallback offline lokal
+  Set<String> _localJoinedChallengeIds = {};
+  Set<String> _localClaimedChallengeIds = {};
+  Set<String> _localJoinedClubIds = {};
+  Set<String> _localRsvpEventIds = {};
+
   bool _isLoading = true;
-
-  final List<_ChallengeItem> _challenges = const [
-    _ChallengeItem(
-      id: 'ch_monthly_25k',
-      title: 'Jatinangor 25K Endurance',
-      description: 'Kumpulkan total jarak lari 25 km dari seluruh sesi rekamanmu.',
-      badgeText: 'ENDURANCE 25K',
-      targetValue: 25.0,
-      unit: 'km',
-      baseParticipants: 1240,
-      icon: Icons.military_tech,
-      accentColor: AppColors.primaryOrange,
-    ),
-    _ChallengeItem(
-      id: 'ch_single_5k',
-      title: '5K Finisher Challenge',
-      description: 'Selesaikan minimal 5 km dalam satu kali sesi lari tanpa henti.',
-      badgeText: '5K MILESTONE',
-      targetValue: 5.0,
-      unit: 'single_km',
-      baseParticipants: 2180,
-      icon: Icons.bolt,
-      accentColor: AppColors.accentBlue,
-    ),
-    _ChallengeItem(
-      id: 'ch_consistency_5',
-      title: '5x Active Runner Streak',
-      description: 'Selesaikan minimal 5 sesi lari yang tercatat di riwayat aktivitas.',
-      badgeText: 'CONSISTENCY',
-      targetValue: 5.0,
-      unit: 'runs',
-      baseParticipants: 945,
-      icon: Icons.local_fire_department,
-      accentColor: AppColors.accentGreen,
-    ),
-    _ChallengeItem(
-      id: 'ch_calorie_1500',
-      title: '1,500 kcal Burn Target',
-      description: 'Bakar total 1.500 kalori dari aktivitas lari maupun trail.',
-      badgeText: 'CALORIE BURN',
-      targetValue: 1500.0,
-      unit: 'kcal',
-      baseParticipants: 780,
-      icon: Icons.whatshot,
-      accentColor: Colors.amber,
-    ),
-  ];
-
-  final List<_RunningClub> _clubs = const [
-    _RunningClub(
-      id: 'club_sumedang',
-      name: 'Runner Club Sumedang',
-      location: 'Jatinangor & Sumedang',
-      description: 'Komunitas lari terbuka untuk mahasiswa dan warga kawasan Jatinangor–Sumedang.',
-      schedule: 'Rabu 19:30 & Minggu 06:00',
-      baseMembers: 117,
-      icon: Icons.directions_run,
-      color: AppColors.primaryOrange,
-      simulatedMembers: [
-        _ClubMember(name: 'Raka Pratama', weeklyKm: 24.5, runsCount: 5),
-        _ClubMember(name: 'Nadia Putri', weeklyKm: 18.2, runsCount: 4),
-        _ClubMember(name: 'Dimas Saputra', weeklyKm: 12.0, runsCount: 3),
-        _ClubMember(name: 'Fajar Nugroho', weeklyKm: 6.4, runsCount: 2),
-        _ClubMember(name: 'Salsa Maharani', weeklyKm: 3.1, runsCount: 1),
-      ],
-    ),
-    _RunningClub(
-      id: 'club_manglayang',
-      name: 'Bandung Timur Trail Runners',
-      location: 'Cileunyi & Kaki Manglayang',
-      description: 'Fokus latihan elevasi, lari lintas alam, dan persiapan trail run Jawa Barat.',
-      schedule: 'Sabtu 06:15 • Basecamp Manglayang',
-      baseMembers: 430,
-      icon: Icons.terrain,
-      color: AppColors.accentGreen,
-      simulatedMembers: [
-        _ClubMember(name: 'Bagas Wicaksono', weeklyKm: 34.8, runsCount: 6),
-        _ClubMember(name: 'Tari Anggraini', weeklyKm: 21.0, runsCount: 4),
-        _ClubMember(name: 'Reza Kurniawan', weeklyKm: 14.5, runsCount: 3),
-        _ClubMember(name: 'Kevin Wijaya', weeklyKm: 7.5, runsCount: 2),
-      ],
-    ),
-    _RunningClub(
-      id: 'club_campus_pacer',
-      name: 'Unpad Morning Pacer',
-      location: 'Kawasan Kampus Jatinangor',
-      description: 'Grup lari pagi santai sebelum kuliah dengan berbagai kelompok pace (5:30 – 7:30/km).',
-      schedule: 'Selasa & Jumat • 05:45 WIB',
-      baseMembers: 264,
-      icon: Icons.speed,
-      color: AppColors.accentBlue,
-      simulatedMembers: [
-        _ClubMember(name: 'Alvin Hendrawan', weeklyKm: 19.6, runsCount: 5),
-        _ClubMember(name: 'Citra Lestari', weeklyKm: 15.1, runsCount: 4),
-        _ClubMember(name: 'Gilang Ramadhan', weeklyKm: 9.8, runsCount: 2),
-        _ClubMember(name: 'Hana Pertiwi', weeklyKm: 4.2, runsCount: 1),
-      ],
-    ),
-  ];
-
-  final List<_CommunityEvent> _events = const [
-    _CommunityEvent(
-      id: 'ev_jatinangor_night',
-      title: 'Jatinangor Loop Night Run 5K',
-      dateStr: 'Sabtu, 21 Nov 2026 • 19:30 WIB',
-      location: 'Gerbang Utama Unpad, Jatinangor',
-      distanceTag: '5.0 KM',
-      paceGroup: 'All Pace (6:00 - 7:30 /km)',
-      description: 'Lari malam santai bersama komunitas lokal mengelilingi rute utama Jatinangor. Gratis hidrasi di titik finish.',
-      baseAttendees: 84,
-    ),
-    _CommunityEvent(
-      id: 'ev_siliwangi_sunday',
-      title: 'Siliwangi Sunday Morning 10K',
-      dateStr: 'Minggu, 29 Nov 2026 • 06:00 WIB',
-      location: 'Stadion Siliwangi, Bandung',
-      distanceTag: '10.0 KM',
-      paceGroup: 'Tempo & Endurance',
-      description: 'Latihan long run akhir pekan bersama pacer berpengalaman untuk persiapan lomba 10K.',
-      baseAttendees: 142,
-    ),
-    _CommunityEvent(
-      id: 'ev_manglayang_funtrail',
-      title: 'Manglayang Sunrise Fun Trail',
-      dateStr: 'Minggu, 6 Des 2026 • 06:15 WIB',
-      location: 'Pos Pendakian Barubereum, Cileunyi',
-      distanceTag: '6.5 KM',
-      paceGroup: 'Trail / Elevasi +240m',
-      description: 'Eksplorasi jalur tanah dan kebun pinus kaki Gunung Manglayang dengan pemandangan matahari terbit.',
-      baseAttendees: 59,
-    ),
-  ];
+  String? _claimingChallengeId;
 
   @override
   void initState() {
     super.initState();
     _loadAllData();
     ProfileStorageService.profileUpdateNotifier.addListener(_loadAllData);
+    RunStorageService.runUpdateNotifier.addListener(_loadAllData);
+    AuthService.authStateNotifier.addListener(_loadAllData);
   }
 
   @override
   void dispose() {
     ProfileStorageService.profileUpdateNotifier.removeListener(_loadAllData);
+    RunStorageService.runUpdateNotifier.removeListener(_loadAllData);
+    AuthService.authStateNotifier.removeListener(_loadAllData);
     super.dispose();
   }
 
@@ -271,84 +71,52 @@ class _GroupScreenState extends State<GroupScreen> {
     final prefs = await SharedPreferences.getInstance();
     final runs = await _runService.getSavedRuns();
     final profile = await _profileService.getProfile();
+    final snapshot = await _communityService.fetchCommunitySnapshot();
 
-    if (mounted) {
-      setState(() {
-        _savedRuns = runs;
-        _profile = profile;
-        _joinedChallengeIds = (prefs.getStringList(_prefJoinedChallenges) ?? ['ch_monthly_25k']).toSet();
-        _joinedClubIds = (prefs.getStringList(_prefJoinedClubs) ?? ['club_sumedang']).toSet();
-        _rsvpEventIds = (prefs.getStringList(_prefRsvpEvents) ?? []).toSet();
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<void> _toggleChallenge(String id) async {
-    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     setState(() {
-      if (_joinedChallengeIds.contains(id)) {
-        _joinedChallengeIds.remove(id);
-      } else {
-        _joinedChallengeIds.add(id);
-      }
+      _savedRuns = runs;
+      _profile = profile;
+      _isOnlineMode = snapshot.isOnline;
+      _needsSchemaSetup = snapshot.needsSchemaSetup;
+      _statusMessage = snapshot.statusMessage;
+      _onlineChallenges = snapshot.challenges;
+      _onlineClubs = snapshot.clubs;
+      _onlineEvents = snapshot.events;
+      _localJoinedChallengeIds =
+          (prefs.getStringList(_prefJoinedChallenges) ?? ['ch_starter_1k']).toSet();
+      _localClaimedChallengeIds = (prefs.getStringList(_prefClaimedChallenges) ?? []).toSet();
+      _localJoinedClubIds = (prefs.getStringList(_prefJoinedClubs) ?? ['club_sumedang']).toSet();
+      _localRsvpEventIds = (prefs.getStringList(_prefRsvpEvents) ?? []).toSet();
+      _isLoading = false;
     });
-    await prefs.setStringList(_prefJoinedChallenges, _joinedChallengeIds.toList());
   }
 
-  Future<void> _toggleClub(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    final joining = !_joinedClubIds.contains(id);
-    setState(() {
-      if (joining) {
-        _joinedClubIds.add(id);
-      } else {
-        _joinedClubIds.remove(id);
-      }
-    });
-    await prefs.setStringList(_prefJoinedClubs, _joinedClubIds.toList());
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(joining ? 'Berhasil bergabung dengan klub!' : 'Keluar dari klub'),
-          backgroundColor: AppColors.cardElevated,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+  Future<bool> _ensureLoggedInForOnlineAction() async {
+    if (AuthService.isLoggedIn) return true;
+    final didLogin = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    if (didLogin == true) {
+      await _loadAllData();
+      return AuthService.isLoggedIn;
     }
+    return false;
   }
 
-  Future<void> _toggleEventRsvp(String id) async {
-    final prefs = await SharedPreferences.getInstance();
-    final attending = !_rsvpEventIds.contains(id);
-    setState(() {
-      if (attending) {
-        _rsvpEventIds.add(id);
-      } else {
-        _rsvpEventIds.remove(id);
-      }
-    });
-    await prefs.setStringList(_prefRsvpEvents, _rsvpEventIds.toList());
+  // --- HITUNG PROGRES NYATA & LEVEL GAMIFIKASI USER ---
+  double get _totalDistance => RunnerStats.totalDistance(_savedRuns);
+  double get _longestSingleKm =>
+      _savedRuns.isEmpty ? 0.0 : _savedRuns.map((r) => r.distanceInKm).reduce(math.max);
+  double get _totalCalories => RunnerStats.totalCalories(_savedRuns);
+  int get _userTotalXp => RunnerStats.totalXp(_savedRuns, bonusXp: _profile.bonusXp);
+  int get _userLevel => RunnerStats.runnerLevel(_savedRuns, bonusXp: _profile.bonusXp);
+  double get _userLevelProgress => RunnerStats.levelProgress(_savedRuns, bonusXp: _profile.bonusXp);
+  String get _userRank => RunnerStats.rankTitle(_savedRuns, bonusXp: _profile.bonusXp);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(attending ? 'Kehadiran dikonfirmasi! Sampai jumpa di garis start.' : 'RSVP acara dibatalkan'),
-          backgroundColor: AppColors.cardElevated,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  // --- HITUNG PROGRES NYATA USER UNTUK SETIAP TANTANGAN ---
-  double get _totalDistance => _savedRuns.fold(0.0, (s, r) => s + r.distanceInKm);
-  double get _longestSingleKm => _savedRuns.isEmpty ? 0.0 : _savedRuns.map((r) => r.distanceInKm).reduce(math.max);
-  double get _totalCalories => _savedRuns.fold(0.0, (s, r) => s + r.calories);
-
-  double _getCurrentProgressValue(_ChallengeItem item) {
-    switch (item.unit) {
+  double _getCurrentProgressValue(String unit) {
+    switch (unit) {
       case 'km':
         return _totalDistance;
       case 'single_km':
@@ -362,41 +130,482 @@ class _GroupScreenState extends State<GroupScreen> {
     }
   }
 
-  String _formatProgressText(_ChallengeItem item, double currentVal) {
-    if (item.unit == 'runs') {
-      return '${currentVal.toInt()} / ${item.targetValue.toInt()} sesi';
+  String _formatProgressText(String unit, double targetValue, double currentVal) {
+    if (unit == 'runs') {
+      return '${currentVal.toInt()} / ${targetValue.toInt()} sesi';
     }
-    if (item.unit == 'kcal') {
-      return '${currentVal.toStringAsFixed(0)} / ${item.targetValue.toStringAsFixed(0)} kcal';
+    if (unit == 'kcal') {
+      return '${currentVal.toStringAsFixed(0)} / ${targetValue.toStringAsFixed(0)} kcal';
     }
-    return '${currentVal.toStringAsFixed(1)} / ${item.targetValue.toStringAsFixed(0)} km';
+    return '${currentVal.toStringAsFixed(1)} / ${targetValue.toStringAsFixed(0)} km';
   }
 
-  // --- BOTTOM SHEET LEADERBOARD KLUB (MENGGABUNGKAN USER ASLI + ANGGOTA KLUB) ---
-  void _showClubLeaderboardSheet(_RunningClub club) {
-    final isJoined = _joinedClubIds.contains(club.id);
+  // --- AKSI TANTANGAN (LEVEL GATING + KLAIM BONUS XP) ---
+  Future<void> _handleToggleOnlineChallenge(OnlineChallenge ch) async {
+    if (!ch.isJoined && !RunnerStats.meetsLevelRequirement(userLevel: _userLevel, minLevel: ch.minLevel)) {
+      final xpMissing = RunnerStats.xpNeededForLevel(ch.minLevel, _userTotalXp);
+      _showSnack('Terkunci! Capai Level ${ch.minLevel} (kurang $xpMissing XP) untuk ikut tantangan ini.', isError: true);
+      return;
+    }
+    if (!await _ensureLoggedInForOnlineAction()) return;
+    try {
+      await _communityService.toggleChallenge(
+        ch.id,
+        currentlyJoined: ch.isJoined,
+        userLevel: _userLevel,
+        minLevel: ch.minLevel,
+      );
+      await _loadAllData();
+    } catch (e) {
+      _showSnack('Gagal memperbarui tantangan: $e', isError: true);
+    }
+  }
 
-    // Gabungkan data asli user ke dalam leaderboard klub
-    final List<_ClubMember> allMembers = [
-      ...club.simulatedMembers,
-      _ClubMember(
-        name: '${_profile.name} (Anda)',
-        weeklyKm: _totalDistance,
-        runsCount: _savedRuns.length,
-        isCurrentUser: true,
-        avatarPath: _profile.avatarPath,
+  Future<void> _handleClaimOnlineChallengeReward(OnlineChallenge ch) async {
+    if (_claimingChallengeId != null) return;
+    if (!await _ensureLoggedInForOnlineAction()) return;
+
+    final oldLevel = _userLevel;
+    setState(() => _claimingChallengeId = ch.id);
+    try {
+      await _communityService.claimChallengeReward(
+        challengeId: ch.id,
+        xpReward: ch.xpReward,
+      );
+      await _loadAllData();
+      if (mounted) {
+        _showRewardClaimedDialog(
+          challengeTitle: ch.title,
+          xpReward: ch.xpReward,
+          leveledUp: _userLevel > oldLevel,
+          newLevel: _userLevel,
+        );
+      }
+    } catch (e) {
+      _showSnack('Gagal klaim hadiah XP: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _claimingChallengeId = null);
+    }
+  }
+
+  Future<void> _handleToggleOfflineChallenge(ChallengeItem ch) async {
+    final isJoined = _localJoinedChallengeIds.contains(ch.id);
+    if (!isJoined && !RunnerStats.meetsLevelRequirement(userLevel: _userLevel, minLevel: ch.minLevel)) {
+      final xpMissing = RunnerStats.xpNeededForLevel(ch.minLevel, _userTotalXp);
+      _showSnack('Terkunci! Capai Level ${ch.minLevel} (kurang $xpMissing XP) untuk ikut tantangan ini.', isError: true);
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      if (isJoined) {
+        _localJoinedChallengeIds.remove(ch.id);
+      } else {
+        _localJoinedChallengeIds.add(ch.id);
+      }
+    });
+    await prefs.setStringList(_prefJoinedChallenges, _localJoinedChallengeIds.toList());
+  }
+
+  Future<void> _handleClaimOfflineChallengeReward(ChallengeItem ch) async {
+    if (_localClaimedChallengeIds.contains(ch.id)) return;
+    final oldLevel = _userLevel;
+    final prefs = await SharedPreferences.getInstance();
+    _localClaimedChallengeIds.add(ch.id);
+    await prefs.setStringList(_prefClaimedChallenges, _localClaimedChallengeIds.toList());
+    await _profileService.addBonusXp(ch.xpReward);
+    await _loadAllData();
+    if (mounted) {
+      _showRewardClaimedDialog(
+        challengeTitle: ch.title,
+        xpReward: ch.xpReward,
+        leveledUp: _userLevel > oldLevel,
+        newLevel: _userLevel,
+      );
+    }
+  }
+
+  void _showRewardClaimedDialog({
+    required String challengeTitle,
+    required int xpReward,
+    required bool leveledUp,
+    required int newLevel,
+  }) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: (leveledUp ? AppColors.primaryOrange : Colors.amber).withValues(alpha: 0.2),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                leveledUp ? Icons.emoji_events : Icons.bolt,
+                color: leveledUp ? AppColors.primaryOrange : Colors.amber,
+                size: 38,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              leveledUp ? 'LEVEL UP • LEVEL $newLevel!' : 'HADIAH XP DIKLAIM!',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 18),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '+$xpReward XP dari "$challengeTitle"',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13.5),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              leveledUp
+                  ? 'Selamat! Rank Anda sekarang $_userRank. Tantangan & akses tier baru kini terbuka!'
+                  : 'Total XP Anda sekarang $_userTotalXp XP (Level $_userLevel). Terus berlari!',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5),
+            ),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryOrange,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Mantap!', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
       ),
-    ];
+    );
+  }
 
-    allMembers.sort((a, b) => b.weeklyKm.compareTo(a.weeklyKm));
+  // --- AKSI KLUB ---
+  Future<void> _handleToggleOnlineClub(OnlineClub club) async {
+    if (!await _ensureLoggedInForOnlineAction()) return;
+    try {
+      final joining = !club.isJoined;
+      await _communityService.toggleClub(club.id, currentlyJoined: club.isJoined);
+      await _loadAllData();
+      _showSnack(joining ? 'Berhasil bergabung dengan ${club.name}!' : 'Keluar dari ${club.name}');
+    } catch (e) {
+      _showSnack('Gagal memperbarui keanggotaan klub: $e', isError: true);
+    }
+  }
 
+  Future<void> _handleToggleOfflineClub(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final joining = !_localJoinedClubIds.contains(id);
+    setState(() {
+      if (joining) {
+        _localJoinedClubIds.add(id);
+      } else {
+        _localJoinedClubIds.remove(id);
+      }
+    });
+    await prefs.setStringList(_prefJoinedClubs, _localJoinedClubIds.toList());
+    _showSnack(joining ? 'Berhasil bergabung dengan klub (offline).' : 'Keluar dari klub.');
+  }
+
+  // --- AKSI ACARA ---
+  Future<void> _handleToggleOnlineEvent(OnlineEvent ev) async {
+    if (!await _ensureLoggedInForOnlineAction()) return;
+    try {
+      final attending = !ev.isAttending;
+      await _communityService.toggleEventRsvp(ev.id, currentlyAttending: ev.isAttending);
+      await _loadAllData();
+      _showSnack(attending ? 'Kehadiran dikonfirmasi! Sampai jumpa di garis start.' : 'RSVP acara dibatalkan.');
+    } catch (e) {
+      _showSnack('Gagal memperbarui RSVP: $e', isError: true);
+    }
+  }
+
+  Future<void> _handleToggleOfflineEvent(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final attending = !_localRsvpEventIds.contains(id);
+    setState(() {
+      if (attending) {
+        _localRsvpEventIds.add(id);
+      } else {
+        _localRsvpEventIds.remove(id);
+      }
+    });
+    await prefs.setStringList(_prefRsvpEvents, _localRsvpEventIds.toList());
+    _showSnack(attending ? 'Kehadiran dicatat secara lokal.' : 'RSVP dibatalkan.');
+  }
+
+  void _showSnack(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.redAccent : AppColors.cardElevated,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // --- BUAT KLUB ONLINE BARU ---
+  Future<void> _showCreateClubSheet() async {
+    if (!_isOnlineMode) {
+      _showSnack('Hubungkan ke internet untuk membuat klub online.', isError: true);
+      return;
+    }
+    if (!await _ensureLoggedInForOnlineAction()) return;
+    if (!mounted) return;
+
+    final nameCtrl = TextEditingController();
+    final locCtrl = TextEditingController(text: _profile.city);
+    final scheduleCtrl = TextEditingController(text: 'Minggu • 06:00 WIB');
+    final descCtrl = TextEditingController();
+    String selectedHex = '#FC4C02';
+    bool isSubmitting = false;
+
+    const palette = ['#FC4C02', '#00E676', '#29B6F6', '#E040FB', '#FFC107'];
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.cardDark,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) => Padding(
+          padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(sheetCtx).viewInsets.bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('Buat Klub Lari Baru', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                const SizedBox(height: 14),
+                _buildSheetField(nameCtrl, 'Nama Klub (contoh: Bandung Sub-50)', Icons.groups_outlined),
+                const SizedBox(height: 10),
+                _buildSheetField(locCtrl, 'Kota / Wilayah', Icons.location_on_outlined),
+                const SizedBox(height: 10),
+                _buildSheetField(scheduleCtrl, 'Jadwal Latihan', Icons.schedule_outlined),
+                const SizedBox(height: 10),
+                _buildSheetField(descCtrl, 'Deskripsi singkat klub', Icons.notes, maxLines: 2),
+                const SizedBox(height: 12),
+                const Text('Warna Klub', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                const SizedBox(height: 8),
+                Row(
+                  children: palette.map((hex) {
+                    final color = CommunityService.parseHexColor(hex);
+                    final isSelected = selectedHex == hex;
+                    return GestureDetector(
+                      onTap: () => setSheetState(() => selectedHex = hex),
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        margin: const EdgeInsets.only(right: 10),
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: isSelected ? Colors.white : Colors.transparent, width: 2.5),
+                        ),
+                        child: isSelected ? const Icon(Icons.check, color: Colors.white, size: 16) : null,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryOrange,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            if (nameCtrl.text.trim().isEmpty) return;
+                            setSheetState(() => isSubmitting = true);
+                            try {
+                              await _communityService.createClub(
+                                name: nameCtrl.text,
+                                location: locCtrl.text.trim().isEmpty ? 'Indonesia' : locCtrl.text,
+                                schedule: scheduleCtrl.text.trim().isEmpty ? 'Fleksibel' : scheduleCtrl.text,
+                                description: descCtrl.text.trim().isEmpty
+                                    ? 'Komunitas pelari Adventure Runner.'
+                                    : descCtrl.text,
+                                colorHex: selectedHex,
+                              );
+                              if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                              await _loadAllData();
+                              _showSnack('Klub "${nameCtrl.text.trim()}" berhasil dibuat!');
+                            } catch (e) {
+                              setSheetState(() => isSubmitting = false);
+                              _showSnack('Gagal membuat klub: $e', isError: true);
+                            }
+                          },
+                    child: isSubmitting
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Buat Klub Sekarang', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    nameCtrl.dispose();
+    locCtrl.dispose();
+    scheduleCtrl.dispose();
+    descCtrl.dispose();
+  }
+
+  // --- BUAT ACARA KOMUNITAS ONLINE BARU ---
+  Future<void> _showCreateEventSheet() async {
+    if (!_isOnlineMode) {
+      _showSnack('Hubungkan ke internet untuk membuat acara komunitas online.', isError: true);
+      return;
+    }
+    if (!await _ensureLoggedInForOnlineAction()) return;
+    if (!mounted) return;
+
+    final titleCtrl = TextEditingController();
+    final dateCtrl = TextEditingController(text: 'Minggu • 06:00 WIB');
+    final locCtrl = TextEditingController(text: _profile.city);
+    final distCtrl = TextEditingController(text: '5.0 KM');
+    final paceCtrl = TextEditingController(text: 'All Pace');
+    final descCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.cardDark,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (sheetCtx, setSheetState) => Padding(
+          padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(sheetCtx).viewInsets.bottom + 20),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text('Buat Acara Lari Bersama', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+                const SizedBox(height: 14),
+                _buildSheetField(titleCtrl, 'Judul Acara (contoh: Sunday Fun Run 5K)', Icons.event_outlined),
+                const SizedBox(height: 10),
+                _buildSheetField(dateCtrl, 'Hari, Tanggal & Jam', Icons.calendar_today_outlined),
+                const SizedBox(height: 10),
+                _buildSheetField(locCtrl, 'Lokasi Titik Kumpul', Icons.location_on_outlined),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(child: _buildSheetField(distCtrl, 'Jarak (5.0 KM)', Icons.straighten)),
+                    const SizedBox(width: 10),
+                    Expanded(child: _buildSheetField(paceCtrl, 'Pace Group', Icons.speed)),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _buildSheetField(descCtrl, 'Deskripsi / info tambahan', Icons.notes, maxLines: 2),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryOrange,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            if (titleCtrl.text.trim().isEmpty) return;
+                            setSheetState(() => isSubmitting = true);
+                            try {
+                              await _communityService.createEvent(
+                                title: titleCtrl.text,
+                                dateStr: dateCtrl.text.trim().isEmpty ? 'Segera diumumkan' : dateCtrl.text,
+                                location: locCtrl.text.trim().isEmpty ? 'Indonesia' : locCtrl.text,
+                                distanceTag: distCtrl.text.trim().isEmpty ? '5.0 KM' : distCtrl.text,
+                                paceGroup: paceCtrl.text.trim().isEmpty ? 'All Pace' : paceCtrl.text,
+                                description: descCtrl.text.trim().isEmpty
+                                    ? 'Lari santai bersama komunitas Adventure Runner.'
+                                    : descCtrl.text,
+                              );
+                              if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                              await _loadAllData();
+                              _showSnack('Acara "${titleCtrl.text.trim()}" dipublikasikan!');
+                            } catch (e) {
+                              setSheetState(() => isSubmitting = false);
+                              _showSnack('Gagal membuat acara: $e', isError: true);
+                            }
+                          },
+                    child: isSubmitting
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('Publikasikan Acara', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    titleCtrl.dispose();
+    dateCtrl.dispose();
+    locCtrl.dispose();
+    distCtrl.dispose();
+    paceCtrl.dispose();
+    descCtrl.dispose();
+  }
+
+  Widget _buildSheetField(TextEditingController ctrl, String label, IconData icon, {int maxLines = 1}) {
+    return TextField(
+      controller: ctrl,
+      maxLines: maxLines,
+      style: const TextStyle(color: Colors.white, fontSize: 13.5),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+        prefixIcon: Icon(icon, color: AppColors.primaryOrange, size: 18),
+        filled: true,
+        fillColor: AppColors.backgroundDark,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+      ),
+    );
+  }
+
+  // --- LEADERBOARD KLUB ONLINE (LIVE SUPABASE) ---
+  void _showOnlineClubLeaderboardSheet(OnlineClub club) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.cardDark,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
       builder: (ctx) => DraggableScrollableSheet(
         expand: false,
         initialChildSize: 0.72,
@@ -419,8 +628,8 @@ class _GroupScreenState extends State<GroupScreen> {
                 children: [
                   CircleAvatar(
                     radius: 24,
-                    backgroundColor: club.color.withOpacity(0.2),
-                    child: Icon(club.icon, color: club.color, size: 26),
+                    backgroundColor: club.color.withValues(alpha: 0.2),
+                    child: Icon(Icons.directions_run, color: club.color, size: 26),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -428,7 +637,7 @@ class _GroupScreenState extends State<GroupScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(club.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                        Text(club.schedule, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                        Text('${club.location} • ${club.schedule}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -436,14 +645,128 @@ class _GroupScreenState extends State<GroupScreen> {
               ),
               const SizedBox(height: 10),
               Text(club.description, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               const Divider(color: Colors.white12),
               const SizedBox(height: 8),
               const Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Papan Peringkat Jarak Klub', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white)),
-                  Text('Live Sync', style: TextStyle(color: AppColors.accentGreen, fontSize: 11, fontWeight: FontWeight.bold)),
+                  Text('Papan Peringkat Mingguan Live', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white)),
+                  Text('Online Sync', style: TextStyle(color: AppColors.accentGreen, fontSize: 11, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: FutureBuilder<List<OnlineClubMember>>(
+                  future: _communityService.fetchClubLeaderboard(club.id),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator(color: AppColors.primaryOrange));
+                    }
+                    final members = snapshot.data ?? [];
+                    if (members.isEmpty) {
+                      return const Center(
+                        child: Text(
+                          'Belum ada anggota bergabung.\nJadilah pelari pertama di klub ini!',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                        ),
+                      );
+                    }
+                    return ListView.builder(
+                      controller: scrollController,
+                      itemCount: members.length,
+                      itemBuilder: (_, idx) {
+                        final member = members[idx];
+                        final rank = idx + 1;
+                        return _buildLeaderboardRow(
+                          rank: rank,
+                          name: member.isCurrentUser ? '${member.name} (Anda)' : member.name,
+                          subtitle: '${member.runsCount} sesi minggu ini • ${member.city}',
+                          weeklyKm: member.weeklyKm,
+                          isCurrentUser: member.isCurrentUser,
+                          avatarPath: member.isCurrentUser ? _profile.avatarPath : null,
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: club.isJoined ? AppColors.cardElevated : club.color,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _handleToggleOnlineClub(club);
+                  },
+                  child: Text(
+                    club.isJoined ? 'Keluar dari Klub' : 'Gabung Klub Sekarang',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- LEADERBOARD KLUB FALLBACK OFFLINE ---
+  void _showOfflineClubLeaderboardSheet(RunningClub club) {
+    final isJoined = _localJoinedClubIds.contains(club.id);
+    final double userWeeklyKm = RunnerStats.weeklyDistance(_savedRuns);
+    final int userWeeklyRuns = RunnerStats.weeklyRunsCount(_savedRuns);
+    final List<ClubMember> allMembers = [
+      ...club.simulatedMembers,
+      ClubMember(
+        name: '${_profile.name} (Anda)',
+        weeklyKm: userWeeklyKm,
+        runsCount: userWeeklyRuns,
+        isCurrentUser: true,
+        avatarPath: _profile.avatarPath,
+      ),
+    ]..sort((a, b) => b.weeklyKm.compareTo(a.weeklyKm));
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.cardDark,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
+      builder: (ctx) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        maxChildSize: 0.9,
+        minChildSize: 0.5,
+        builder: (_, scrollController) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(club.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+              Text(club.schedule, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              const SizedBox(height: 12),
+              const Divider(color: Colors.white12),
+              const SizedBox(height: 8),
+              const Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Papan Peringkat Mingguan (Offline)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white)),
+                  Text('Mode Offline', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
                 ],
               ),
               const SizedBox(height: 10),
@@ -452,82 +775,14 @@ class _GroupScreenState extends State<GroupScreen> {
                   controller: scrollController,
                   itemCount: allMembers.length,
                   itemBuilder: (_, idx) {
-                    final member = allMembers[idx];
-                    final rank = idx + 1;
-                    final hasAvatar = member.avatarPath != null;
-
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: member.isCurrentUser
-                            ? AppColors.primaryOrange.withOpacity(0.18)
-                            : AppColors.backgroundDark,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: member.isCurrentUser ? AppColors.primaryOrange : Colors.white10,
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 26,
-                            child: Text(
-                              '#$rank',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 13,
-                                color: rank == 1
-                                    ? Colors.amber
-                                    : rank == 2
-                                        ? Colors.grey.shade300
-                                        : rank == 3
-                                            ? Colors.orange.shade300
-                                            : AppColors.textSecondary,
-                              ),
-                            ),
-                          ),
-                          CircleAvatar(
-                            radius: 17,
-                            backgroundColor: AppColors.cardElevated,
-                            backgroundImage: hasAvatar ? FileImage(File(member.avatarPath!)) : null,
-                            child: !hasAvatar
-                                ? Text(
-                                    member.name[0].toUpperCase(),
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                                  )
-                                : null,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  member.name,
-                                  style: TextStyle(
-                                    fontWeight: member.isCurrentUser ? FontWeight.bold : FontWeight.w600,
-                                    color: Colors.white,
-                                    fontSize: 13.5,
-                                  ),
-                                ),
-                                Text(
-                                  '${member.runsCount} sesi aktivitas',
-                                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Text(
-                            '${member.weeklyKm.toStringAsFixed(1)} km',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 14,
-                              color: member.isCurrentUser ? AppColors.primaryOrange : Colors.white,
-                            ),
-                          ),
-                        ],
-                      ),
+                    final m = allMembers[idx];
+                    return _buildLeaderboardRow(
+                      rank: idx + 1,
+                      name: m.name,
+                      subtitle: '${m.runsCount} sesi aktivitas',
+                      weeklyKm: m.weeklyKm,
+                      isCurrentUser: m.isCurrentUser,
+                      avatarPath: m.avatarPath,
                     );
                   },
                 ),
@@ -543,10 +798,10 @@ class _GroupScreenState extends State<GroupScreen> {
                   ),
                   onPressed: () {
                     Navigator.pop(ctx);
-                    _toggleClub(club.id);
+                    _handleToggleOfflineClub(club.id);
                   },
                   child: Text(
-                    isJoined ? 'Keluar dari Klub' : 'Gabung Klub Sekarang',
+                    isJoined ? 'Keluar dari Klub' : 'Gabung Klub',
                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -558,6 +813,85 @@ class _GroupScreenState extends State<GroupScreen> {
     );
   }
 
+  Widget _buildLeaderboardRow({
+    required int rank,
+    required String name,
+    required String subtitle,
+    required double weeklyKm,
+    required bool isCurrentUser,
+    String? avatarPath,
+  }) {
+    final hasAvatar = avatarPath != null;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isCurrentUser ? AppColors.primaryOrange.withValues(alpha: 0.18) : AppColors.backgroundDark,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: isCurrentUser ? AppColors.primaryOrange : Colors.white10),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 26,
+            child: Text(
+              '#$rank',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 13,
+                color: rank == 1
+                    ? Colors.amber
+                    : rank == 2
+                        ? Colors.grey.shade300
+                        : rank == 3
+                            ? Colors.orange.shade300
+                            : AppColors.textSecondary,
+              ),
+            ),
+          ),
+          CircleAvatar(
+            radius: 17,
+            backgroundColor: AppColors.cardElevated,
+            backgroundImage: hasAvatar ? FileImage(File(avatarPath)) : null,
+            child: !hasAvatar
+                ? Text(
+                    name.trim().isNotEmpty ? name.trim()[0].toUpperCase() : '?',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  )
+                : null,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: TextStyle(
+                    fontWeight: isCurrentUser ? FontWeight.bold : FontWeight.w600,
+                    color: Colors.white,
+                    fontSize: 13.5,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(subtitle, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+              ],
+            ),
+          ),
+          Text(
+            '${weeklyKm.toStringAsFixed(1)} km',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 14,
+              color: isCurrentUser ? AppColors.primaryOrange : Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
@@ -565,14 +899,52 @@ class _GroupScreenState extends State<GroupScreen> {
       child: Scaffold(
         backgroundColor: AppColors.backgroundDark,
         appBar: AppBar(
-          title: const Text('GRUP & KOMUNITAS', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.1, fontSize: 16)),
+          title: Row(
+            children: [
+              const Text(
+                'GRUP & KOMUNITAS',
+                style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0, fontSize: 15.5),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (_isOnlineMode ? AppColors.accentGreen : Colors.amber).withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(
+                      radius: 3.5,
+                      backgroundColor: _isOnlineMode ? AppColors.accentGreen : Colors.amber,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _isOnlineMode ? 'ONLINE' : 'OFFLINE',
+                      style: TextStyle(
+                        color: _isOnlineMode ? AppColors.accentGreen : Colors.amber,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           backgroundColor: AppColors.backgroundDark,
           elevation: 0,
           actions: [
             IconButton(
-              tooltip: 'Sinkronisasi Progres',
+              tooltip: 'Sinkronisasi Komunitas',
               icon: const Icon(Icons.sync, color: Colors.white70),
-              onPressed: _loadAllData,
+              onPressed: () async {
+                if (AuthService.isLoggedIn) {
+                  await AuthService.syncLocalStatsToCloud();
+                }
+                await _loadAllData();
+              },
             ),
           ],
           bottom: const TabBar(
@@ -588,366 +960,847 @@ class _GroupScreenState extends State<GroupScreen> {
             ],
           ),
         ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator(color: AppColors.primaryOrange))
-            : TabBarView(
-                children: [
-                  _buildChallengesTab(),
-                  _buildClubsTab(),
-                  _buildEventsTab(),
-                ],
-              ),
-      ),
-    );
-  }
-
-  // --- TAB 1: TANTANGAN DENGAN PROGRES ASLI ---
-  Widget _buildChallengesTab() {
-    return RefreshIndicator(
-      onRefresh: _loadAllData,
-      color: AppColors.primaryOrange,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _challenges.length,
-        itemBuilder: (context, index) {
-          final ch = _challenges[index];
-          final isJoined = _joinedChallengeIds.contains(ch.id);
-          final currentVal = _getCurrentProgressValue(ch);
-          final ratio = (currentVal / ch.targetValue).clamp(0.0, 1.0);
-          final isCompleted = ratio >= 1.0;
-
-          return Container(
-            margin: const EdgeInsets.only(bottom: 14),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.cardDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isCompleted
-                    ? AppColors.accentGreen.withOpacity(0.6)
-                    : isJoined
-                        ? ch.accentColor.withOpacity(0.4)
-                        : Colors.white10,
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: ch.accentColor.withOpacity(0.18),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(ch.icon, color: ch.accentColor, size: 24),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            ch.badgeText,
-                            style: TextStyle(
-                              color: ch.accentColor,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.7,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            ch.title,
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (isCompleted)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.accentGreen.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text(
-                          'SELESAI',
-                          style: TextStyle(color: AppColors.accentGreen, fontSize: 10, fontWeight: FontWeight.w900),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(ch.description, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                const SizedBox(height: 14),
-
-                // Progress bar progres nyata user
-                if (isJoined) ...[
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Progres Anda: ${_formatProgressText(ch, currentVal)}',
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                      Text(
-                        '${(ratio * 100).toInt()}%',
-                        style: TextStyle(color: ch.accentColor, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: LinearProgressIndicator(
-                      value: ratio,
-                      minHeight: 7,
-                      backgroundColor: Colors.white10,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        isCompleted ? AppColors.accentGreen : ch.accentColor,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
+        body: Column(
+          children: [
+            if (!AuthService.isLoggedIn) _buildGuestLoginBanner(),
+            if (_needsSchemaSetup && _statusMessage != null) _buildSchemaWarningBanner(_statusMessage!),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: AppColors.primaryOrange))
+                  : TabBarView(
                       children: [
-                        const Icon(Icons.people_outline, size: 16, color: AppColors.textSecondary),
-                        const SizedBox(width: 5),
-                        Text(
-                          '${ch.baseParticipants + (isJoined ? 1 : 0)} Peserta',
-                          style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                        ),
+                        _buildChallengesTab(),
+                        _buildClubsTab(),
+                        _buildEventsTab(),
                       ],
                     ),
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        backgroundColor: isJoined ? Colors.transparent : ch.accentColor,
-                        side: BorderSide(color: isJoined ? Colors.white24 : ch.accentColor),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                      ),
-                      onPressed: () => _toggleChallenge(ch.id),
-                      child: Text(
-                        isJoined ? 'Diikuti ✓' : 'Gabung Tantangan',
-                        style: TextStyle(
-                          color: isJoined ? Colors.white70 : Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ),
-          );
-        },
+          ],
+        ),
       ),
     );
   }
 
-  // --- TAB 2: KLUB + LEADERBOARD ---
-  Widget _buildClubsTab() {
+  Widget _buildGuestLoginBanner() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 10, 16, 2),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.primaryOrange.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primaryOrange.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.public, color: AppColors.primaryOrange, size: 20),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Masuk akun untuk gabung klub, buat acara & bersaing di leaderboard online.',
+              style: TextStyle(color: Colors.white, fontSize: 11.5),
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryOrange,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              minimumSize: Size.zero,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: _ensureLoggedInForOnlineAction,
+            child: const Text('Masuk', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSchemaWarningBanner(String message) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline, color: Colors.amber, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(message, style: const TextStyle(color: Colors.amber, fontSize: 11)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- TAB 1: TANTANGAN (LEVEL GATING + KLAIM BONUS XP) ---
+  Widget _buildChallengesTab() {
+    if (_isOnlineMode) {
+      return RefreshIndicator(
+        onRefresh: _loadAllData,
+        color: AppColors.primaryOrange,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _buildRunnerLevelBanner(),
+            const SizedBox(height: 14),
+            ..._onlineChallenges.map((ch) => _buildChallengeCard(
+                  id: ch.id,
+                  title: ch.title,
+                  description: ch.description,
+                  badgeText: ch.badgeText,
+                  unit: ch.unit,
+                  targetValue: ch.targetValue,
+                  minLevel: ch.minLevel,
+                  xpReward: ch.xpReward,
+                  accentColor: ch.accentColor,
+                  icon: ch.icon,
+                  participantsCount: ch.participantsCount,
+                  isJoined: ch.isJoined,
+                  isRewardClaimed: ch.isRewardClaimed,
+                  onToggle: () => _handleToggleOnlineChallenge(ch),
+                  onClaimReward: () => _handleClaimOnlineChallengeReward(ch),
+                )),
+          ],
+        ),
+      );
+    }
+
+    const offlineList = CommunitySeedData.challenges;
     return RefreshIndicator(
       onRefresh: _loadAllData,
       color: AppColors.primaryOrange,
-      child: ListView.builder(
+      child: ListView(
         padding: const EdgeInsets.all(16),
-        itemCount: _clubs.length,
-        itemBuilder: (context, index) {
-          final club = _clubs[index];
-          final isJoined = _joinedClubIds.contains(club.id);
-
-          return GestureDetector(
-            onTap: () => _showClubLeaderboardSheet(club),
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 14),
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppColors.cardDark,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: isJoined ? club.color.withOpacity(0.45) : Colors.white10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: club.color.withOpacity(0.18),
-                        child: Icon(club.icon, color: club.color, size: 22),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              club.name,
-                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${club.location} • ${club.baseMembers + (isJoined ? 1 : 0)} Anggota',
-                              style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Icon(Icons.leaderboard, color: club.color, size: 20),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(club.description, style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.schedule, size: 14, color: AppColors.primaryOrange),
-                          const SizedBox(width: 5),
-                          Text(club.schedule, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
-                        ],
-                      ),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isJoined ? AppColors.cardElevated : club.color,
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                          minimumSize: Size.zero,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                        onPressed: () => _toggleClub(club.id),
-                        child: Text(
-                          isJoined ? 'Anggota ✓' : 'Gabung',
-                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
+        children: [
+          _buildRunnerLevelBanner(),
+          const SizedBox(height: 14),
+          ...offlineList.map((ch) {
+            final isJoined = _localJoinedChallengeIds.contains(ch.id);
+            final isClaimed = _localClaimedChallengeIds.contains(ch.id);
+            return _buildChallengeCard(
+              id: ch.id,
+              title: ch.title,
+              description: ch.description,
+              badgeText: ch.badgeText,
+              unit: ch.unit,
+              targetValue: ch.targetValue,
+              minLevel: ch.minLevel,
+              xpReward: ch.xpReward,
+              accentColor: ch.accentColor,
+              icon: ch.icon,
+              participantsCount: ch.baseParticipants + (isJoined ? 1 : 0),
+              isJoined: isJoined,
+              isRewardClaimed: isClaimed,
+              onToggle: () => _handleToggleOfflineChallenge(ch),
+              onClaimReward: () => _handleClaimOfflineChallengeReward(ch),
+            );
+          }),
+        ],
       ),
     );
   }
 
-  // --- TAB 3: ACARA KOMUNITAS + RSVP ---
-  Widget _buildEventsTab() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _events.length,
-      itemBuilder: (context, index) {
-        final ev = _events[index];
-        final isAttending = _rsvpEventIds.contains(ev.id);
-
-        return Container(
-          margin: const EdgeInsets.only(bottom: 14),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.cardDark,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: isAttending ? AppColors.accentGreen.withOpacity(0.5) : Colors.white10),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildRunnerLevelBanner() {
+    final nextLevelXp = _userLevel * RunnerStats.xpPerLevel;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF251A16), AppColors.cardDark],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.primaryOrange.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                     decoration: BoxDecoration(
-                      color: AppColors.primaryOrange.withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(6),
+                      color: AppColors.primaryOrange,
+                      borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
-                      ev.distanceTag,
-                      style: const TextStyle(color: AppColors.primaryOrange, fontSize: 11, fontWeight: FontWeight.w800),
+                      'LV. $_userLevel',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 12),
                     ),
                   ),
+                  const SizedBox(width: 8),
                   Text(
-                    ev.paceGroup,
-                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                    _userRank,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              Text(ev.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white)),
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  const Icon(Icons.calendar_today, size: 13, color: AppColors.primaryOrange),
-                  const SizedBox(width: 6),
-                  Text(ev.dateStr, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  const Icon(Icons.location_on, size: 13, color: AppColors.accentBlue),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(ev.location, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(ev.description, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
-              const SizedBox(height: 14),
-              const Divider(color: Colors.white10, height: 1),
-              const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.people, size: 16, color: AppColors.primaryOrange),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${ev.baseAttendees + (isAttending ? 1 : 0)} Pelari Hadir',
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isAttending ? AppColors.accentGreen.withOpacity(0.2) : AppColors.primaryOrange,
-                      side: isAttending ? const BorderSide(color: AppColors.accentGreen) : BorderSide.none,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    ),
-                    onPressed: () => _toggleEventRsvp(ev.id),
-                    icon: Icon(
-                      isAttending ? Icons.check_circle : Icons.event_available,
-                      size: 16,
-                      color: isAttending ? AppColors.accentGreen : Colors.white,
-                    ),
-                    label: Text(
-                      isAttending ? 'Terdaftar' : 'Ikut Acara',
-                      style: TextStyle(
-                        color: isAttending ? AppColors.accentGreen : Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
+              Text(
+                '$_userTotalXp / $nextLevelXp XP',
+                style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
               ),
             ],
           ),
-        );
-      },
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: _userLevelProgress,
+              minHeight: 7,
+              backgroundColor: Colors.white10,
+              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primaryOrange),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _profile.bonusXp > 0
+                ? 'Selesaikan tantangan untuk klaim Bonus XP (sudah terkumpul +${_profile.bonusXp} XP) & buka tier level tinggi!'
+                : 'Naikkan Level dari lari & klaim Bonus XP tantangan untuk membuka tantangan tier lebih tinggi.',
+            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChallengeCard({
+    required String id,
+    required String title,
+    required String description,
+    required String badgeText,
+    required String unit,
+    required double targetValue,
+    required int minLevel,
+    required int xpReward,
+    required Color accentColor,
+    required IconData icon,
+    required int participantsCount,
+    required bool isJoined,
+    required bool isRewardClaimed,
+    required VoidCallback onToggle,
+    required VoidCallback onClaimReward,
+  }) {
+    final bool isUnlocked = RunnerStats.meetsLevelRequirement(userLevel: _userLevel, minLevel: minLevel);
+    final int xpMissing = RunnerStats.xpNeededForLevel(minLevel, _userTotalXp);
+    final currentVal = _getCurrentProgressValue(unit);
+    final ratio = (currentVal / targetValue).clamp(0.0, 1.0);
+    final isCompleted = ratio >= 1.0;
+    final bool canClaim = isUnlocked && isJoined && isCompleted && !isRewardClaimed;
+    final bool isClaiming = _claimingChallengeId == id;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isUnlocked ? AppColors.cardDark : AppColors.cardDark.withValues(alpha: 0.65),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: !isUnlocked
+              ? Colors.white12
+              : canClaim
+                  ? Colors.amber.withValues(alpha: 0.85)
+                  : isRewardClaimed
+                      ? AppColors.accentGreen.withValues(alpha: 0.6)
+                      : isJoined
+                          ? accentColor.withValues(alpha: 0.45)
+                          : Colors.white10,
+          width: canClaim ? 1.5 : 1.0,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Baris Badge Level Requirement & Hadiah XP
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (isUnlocked ? AppColors.accentGreen : Colors.white24).withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isUnlocked ? Icons.lock_open_rounded : Icons.lock_outline_rounded,
+                      size: 11,
+                      color: isUnlocked ? AppColors.accentGreen : Colors.white54,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'MIN LV. $minLevel',
+                      style: TextStyle(
+                        color: isUnlocked ? AppColors.accentGreen : Colors.white60,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.bolt, size: 12, color: Colors.amber),
+                    const SizedBox(width: 2),
+                    Text(
+                      '+$xpReward XP',
+                      style: const TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              if (isRewardClaimed)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.accentGreen.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('DIKLAIM ✓', style: TextStyle(color: AppColors.accentGreen, fontSize: 10, fontWeight: FontWeight.w900)),
+                )
+              else if (isUnlocked && isJoined && isCompleted)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('SIAP KLAIM', style: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.w900)),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: (isUnlocked ? accentColor : Colors.white24).withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  isUnlocked ? icon : Icons.lock,
+                  color: isUnlocked ? accentColor : Colors.white38,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      badgeText,
+                      style: TextStyle(
+                        color: isUnlocked ? accentColor : Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.7,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: isUnlocked ? Colors.white : Colors.white60,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(description, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          const SizedBox(height: 14),
+
+          // Banner Terkunci jika Level belum cukup
+          if (!isUnlocked) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.lock_clock, size: 16, color: Colors.amber),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Capai Level $minLevel (kurang $xpMissing XP lagi) untuk membuka tantangan ini.',
+                      style: const TextStyle(color: Colors.white70, fontSize: 11.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ] else if (isJoined) ...[
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Progres Anda: ${_formatProgressText(unit, targetValue, currentVal)}',
+                  style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                Text('${(ratio * 100).toInt()}%', style: TextStyle(color: accentColor, fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: ratio,
+                minHeight: 7,
+                backgroundColor: Colors.white10,
+                valueColor: AlwaysStoppedAnimation<Color>(isCompleted ? AppColors.accentGreen : accentColor),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.people_outline, size: 16, color: AppColors.textSecondary),
+                  const SizedBox(width: 5),
+                  Text('$participantsCount Peserta', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                ],
+              ),
+              if (!isUnlocked)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.white12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  ),
+                  onPressed: onToggle,
+                  icon: const Icon(Icons.lock_outline, size: 14, color: Colors.white38),
+                  label: Text(
+                    'Butuh Lv. $minLevel',
+                    style: const TextStyle(color: Colors.white38, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                )
+              else if (canClaim)
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber.shade700,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
+                  onPressed: isClaiming ? null : onClaimReward,
+                  icon: isClaiming
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.card_giftcard, size: 16, color: Colors.white),
+                  label: Text(
+                    isClaiming ? 'Mengklaim...' : 'Klaim +$xpReward XP',
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
+                  ),
+                )
+              else if (isRewardClaimed)
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: AppColors.accentGreen.withValues(alpha: 0.5)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  ),
+                  onPressed: null,
+                  icon: const Icon(Icons.check_circle, size: 15, color: AppColors.accentGreen),
+                  label: const Text(
+                    'Selesai & Diklaim',
+                    style: TextStyle(color: AppColors.accentGreen, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                )
+              else
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: isJoined ? Colors.transparent : accentColor,
+                    side: BorderSide(color: isJoined ? Colors.white24 : accentColor),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                  ),
+                  onPressed: onToggle,
+                  child: Text(
+                    isJoined ? 'Diikuti ✓' : 'Gabung Tantangan',
+                    style: TextStyle(
+                      color: isJoined ? Colors.white70 : Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- TAB 2: KLUB + BUAT KLUB ONLINE ---
+  Widget _buildClubsTab() {
+    if (_isOnlineMode) {
+      return RefreshIndicator(
+        onRefresh: _loadAllData,
+        color: AppColors.primaryOrange,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: AppColors.primaryOrange),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: _showCreateClubSheet,
+                icon: const Icon(Icons.add_circle_outline, color: AppColors.primaryOrange, size: 19),
+                label: const Text('Buat Klub Lari Baru', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              ),
+            ),
+            const SizedBox(height: 14),
+            ..._onlineClubs.map((club) => _buildClubCard(
+                  name: club.name,
+                  location: club.location,
+                  description: club.description,
+                  schedule: club.schedule,
+                  color: club.color,
+                  icon: Icons.directions_run,
+                  membersCount: club.membersCount,
+                  isJoined: club.isJoined,
+                  onOpenLeaderboard: () => _showOnlineClubLeaderboardSheet(club),
+                  onToggle: () => _handleToggleOnlineClub(club),
+                )),
+          ],
+        ),
+      );
+    }
+
+    const offlineClubs = CommunitySeedData.clubs;
+    return RefreshIndicator(
+      onRefresh: _loadAllData,
+      color: AppColors.primaryOrange,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: offlineClubs.length,
+        itemBuilder: (context, index) {
+          final club = offlineClubs[index];
+          final isJoined = _localJoinedClubIds.contains(club.id);
+          return _buildClubCard(
+            name: club.name,
+            location: club.location,
+            description: club.description,
+            schedule: club.schedule,
+            color: club.color,
+            icon: club.icon,
+            membersCount: club.baseMembers + (isJoined ? 1 : 0),
+            isJoined: isJoined,
+            onOpenLeaderboard: () => _showOfflineClubLeaderboardSheet(club),
+            onToggle: () => _handleToggleOfflineClub(club.id),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildClubCard({
+    required String name,
+    required String location,
+    required String description,
+    required String schedule,
+    required Color color,
+    required IconData icon,
+    required int membersCount,
+    required bool isJoined,
+    required VoidCallback onOpenLeaderboard,
+    required VoidCallback onToggle,
+  }) {
+    return GestureDetector(
+      onTap: onOpenLeaderboard,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: isJoined ? color.withValues(alpha: 0.45) : Colors.white10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: color.withValues(alpha: 0.18),
+                  child: Icon(icon, color: color, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                      const SizedBox(height: 2),
+                      Text('$location • $membersCount Anggota', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Icon(Icons.leaderboard, color: color, size: 20),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(description, style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      const Icon(Icons.schedule, size: 14, color: AppColors.primaryOrange),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          schedule,
+                          style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isJoined ? AppColors.cardElevated : color,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    minimumSize: Size.zero,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: onToggle,
+                  child: Text(
+                    isJoined ? 'Anggota ✓' : 'Gabung',
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- TAB 3: ACARA + BUAT ACARA ONLINE ---
+  Widget _buildEventsTab() {
+    if (_isOnlineMode) {
+      return RefreshIndicator(
+        onRefresh: _loadAllData,
+        color: AppColors.primaryOrange,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: AppColors.accentBlue),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: _showCreateEventSheet,
+                icon: const Icon(Icons.add_circle_outline, color: AppColors.accentBlue, size: 19),
+                label: const Text('Buat Acara Lari Bersama', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              ),
+            ),
+            const SizedBox(height: 14),
+            ..._onlineEvents.map((ev) => _buildEventCard(
+                  title: ev.title,
+                  dateStr: ev.dateStr,
+                  location: ev.location,
+                  distanceTag: ev.distanceTag,
+                  paceGroup: ev.paceGroup,
+                  description: ev.description,
+                  attendeesCount: ev.attendeesCount,
+                  attendeeNames: ev.attendeeNames,
+                  isAttending: ev.isAttending,
+                  onToggle: () => _handleToggleOnlineEvent(ev),
+                )),
+          ],
+        ),
+      );
+    }
+
+    const offlineEvents = CommunitySeedData.events;
+    return RefreshIndicator(
+      onRefresh: _loadAllData,
+      color: AppColors.primaryOrange,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: offlineEvents.length,
+        itemBuilder: (context, index) {
+          final ev = offlineEvents[index];
+          final isAttending = _localRsvpEventIds.contains(ev.id);
+          return _buildEventCard(
+            title: ev.title,
+            dateStr: ev.dateStr,
+            location: ev.location,
+            distanceTag: ev.distanceTag,
+            paceGroup: ev.paceGroup,
+            description: ev.description,
+            attendeesCount: ev.baseAttendees + (isAttending ? 1 : 0),
+            attendeeNames: const [],
+            isAttending: isAttending,
+            onToggle: () => _handleToggleOfflineEvent(ev.id),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildEventCard({
+    required String title,
+    required String dateStr,
+    required String location,
+    required String distanceTag,
+    required String paceGroup,
+    required String description,
+    required int attendeesCount,
+    required List<String> attendeeNames,
+    required bool isAttending,
+    required VoidCallback onToggle,
+  }) {
+    final attendeesPreview = attendeeNames.isEmpty
+        ? null
+        : attendeeNames.take(3).join(', ') +
+            (attendeeNames.length > 3 ? ' +${attendeeNames.length - 3} lainnya' : '');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isAttending ? AppColors.accentGreen.withValues(alpha: 0.5) : Colors.white10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryOrange.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(distanceTag, style: const TextStyle(color: AppColors.primaryOrange, fontSize: 11, fontWeight: FontWeight.w800)),
+              ),
+              Text(paceGroup, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white)),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(Icons.calendar_today, size: 13, color: AppColors.primaryOrange),
+              const SizedBox(width: 6),
+              Text(dateStr, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.location_on, size: 13, color: AppColors.accentBlue),
+              const SizedBox(width: 6),
+              Expanded(child: Text(location, style: const TextStyle(color: Colors.white70, fontSize: 12))),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(description, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
+          if (attendeesPreview != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Ikut hadir: $attendeesPreview',
+              style: const TextStyle(color: AppColors.accentGreen, fontSize: 11.5, fontWeight: FontWeight.w500),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          const SizedBox(height: 14),
+          const Divider(color: Colors.white10, height: 1),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.people, size: 16, color: AppColors.primaryOrange),
+                  const SizedBox(width: 6),
+                  Text('$attendeesCount Pelari Hadir', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                ],
+              ),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isAttending ? AppColors.accentGreen.withValues(alpha: 0.2) : AppColors.primaryOrange,
+                  side: isAttending ? const BorderSide(color: AppColors.accentGreen) : BorderSide.none,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                ),
+                onPressed: onToggle,
+                icon: Icon(
+                  isAttending ? Icons.check_circle : Icons.event_available,
+                  size: 16,
+                  color: isAttending ? AppColors.accentGreen : Colors.white,
+                ),
+                label: Text(
+                  isAttending ? 'Terdaftar' : 'Ikut Acara',
+                  style: TextStyle(
+                    color: isAttending ? AppColors.accentGreen : Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

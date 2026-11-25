@@ -1,18 +1,19 @@
-import 'dart:async';
-import 'dart:io';
+﻿import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/services/pedometer_service.dart';
 import '../../../core/services/profile_storage_service.dart';
-import '../../../core/services/run_storage_service.dart';
+import '../../../core/utils/formatters.dart';
+import '../../../core/widgets/dark_osm_tile_layer.dart';
 import '../domain/run_model.dart';
+import '../domain/runner_stats.dart';
+import 'post_run_screen.dart';
 
 class _ActivityMode {
   final String name;
@@ -57,13 +58,22 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
   Position? _currentPosition;
   final List<LatLng> _routePoints = [];
+  final List<RunTrackPoint> _trackPoints = [];
   double _totalDistanceInMeters = 0.0;
+  double _elevationGainM = 0.0;
+  double? _lastAltitudeAnchor;
   int _stepCount = 0;
-  int _stepOffsetBeforePause = 0;
-  int _lastRawStreamSteps = 0;
+  int? _lastSensorSteps;
   int _elapsedSeconds = 0;
   int _stationarySeconds = 0; // Penghitung detik diam untuk Auto-Pause
   double _userWeightKg = 65.0;
+  GuidedRoute? _guidedRoute;
+
+  // Guard untuk mencegah lonjakan GPS (spike) & penambahan jarak saat sesi dijeda
+  bool _isResumingSegment = false;
+  DateTime? _lastValidPointTime;
+  DateTime? _lastMovementTime;
+  static const double _maxValidRunningSpeedMs = 12.5; // ~45 km/jam
 
   final List<_ActivityMode> _modes = const [
     _ActivityMode(name: 'Lari', defaultTitle: 'Lari Harian', icon: Icons.directions_run, calorieFactor: 1.036),
@@ -79,23 +89,71 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
   @override
   void initState() {
     super.initState();
+    _guidedRoute = GuidedRouteController.activeRoute.value;
     _loadUserWeight();
     _fetchInitialLocation();
+    ProfileStorageService.profileUpdateNotifier.addListener(_loadUserWeight);
+    GuidedRouteController.activeRoute.addListener(_onGuidedRouteChanged);
   }
 
   @override
   void dispose() {
+    ProfileStorageService.profileUpdateNotifier.removeListener(_loadUserWeight);
+    GuidedRouteController.activeRoute.removeListener(_onGuidedRouteChanged);
     _cancelAllStreams();
     super.dispose();
   }
 
+  void _onGuidedRouteChanged() {
+    final route = GuidedRouteController.activeRoute.value;
+    if (!mounted) return;
+    setState(() => _guidedRoute = route);
+    if (route != null && route.points.length >= 2 && !_isTracking) {
+      try {
+        final bounds = LatLngBounds.fromPoints(route.points);
+        _mapController.fitCamera(
+          CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.fromLTRB(40, 120, 40, 290)),
+        );
+        setState(() => _autoFollowCamera = false);
+      } catch (_) {}
+    }
+  }
+
+  void _recordTrackPoint(Position position, LatLng latLng) {
+    _routePoints.add(latLng);
+    _trackPoints.add(
+      RunTrackPoint(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        altitude: position.altitude,
+        elapsedSeconds: _elapsedSeconds,
+      ),
+    );
+    // Hitung elevation gain aktual dengan ambang 2m untuk menyaring noise vertikal GPS
+    if (position.altitude.abs() > 0.01) {
+      if (_lastAltitudeAnchor == null) {
+        _lastAltitudeAnchor = position.altitude;
+      } else {
+        final diff = position.altitude - _lastAltitudeAnchor!;
+        if (diff >= 2.0) {
+          _elevationGainM += diff;
+          _lastAltitudeAnchor = position.altitude;
+        } else if (diff <= -2.0) {
+          _lastAltitudeAnchor = position.altitude;
+        }
+      }
+    }
+  }
+
   void _cancelAllStreams() {
     _timer?.cancel();
+    _timer = null;
     _countdownTimer?.cancel();
+    _countdownTimer = null;
     _positionSub?.cancel();
+    _positionSub = null;
     _stepSub?.cancel();
-    _locationService.stopTracking();
-    _pedometerService.stopTracking();
+    _stepSub = null;
   }
 
   Future<void> _loadUserWeight() async {
@@ -146,8 +204,15 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
       if (!mounted) return;
 
       if (_isTracking && !_isPaused && _autoPauseEnabled) {
+        final now = DateTime.now();
         final currentSpeedMs = _currentPosition?.speed ?? 0.0;
-        if (currentSpeedMs < 0.5) {
+        final secondsSinceMovement = _lastMovementTime == null
+            ? _stationarySeconds
+            : now.difference(_lastMovementTime!).inSeconds;
+
+        // Anggap diam jika kecepatan GPS rendah ATAU tidak ada perpindahan valid selama >= 5 detik
+        final isStationary = currentSpeedMs < 0.5 || secondsSinceMovement >= 5;
+        if (isStationary) {
           _stationarySeconds++;
           if (_stationarySeconds >= 5 && !_isAutoPaused) {
             HapticFeedback.lightImpact();
@@ -166,18 +231,6 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
         setState(() => _elapsedSeconds++);
       }
     });
-  }
-
-  String _formatDuration(int totalSeconds) {
-    final minutes = (totalSeconds ~/ 60).toString().padLeft(2, '0');
-    final seconds = (totalSeconds % 60).toString().padLeft(2, '0');
-    final hours = (totalSeconds ~/ 3600);
-
-    if (hours > 0) {
-      final hrs = hours.toString().padLeft(2, '0');
-      return '$hrs:$minutes:$seconds';
-    }
-    return '$minutes:$seconds';
   }
 
   String _calculatePace() {
@@ -199,61 +252,120 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
   void _startStreams() {
     _positionSub?.cancel();
-    _positionSub = _locationService.getPositionStream().listen((Position position) {
-      if (!mounted) return;
-      if (position.accuracy > 25.0) return;
+    _positionSub = _locationService.getPositionStream().listen(
+      (Position position) {
+        if (!mounted) return;
+        if (position.accuracy > 25.0) return;
 
-      if (_isAutoPaused && position.speed >= 0.7) {
-        _stationarySeconds = 0;
-        HapticFeedback.mediumImpact();
-        setState(() => _isAutoPaused = false);
-      }
+        final now = DateTime.now();
+        final newLatLng = LatLng(position.latitude, position.longitude);
 
-      if (_effectivelyPaused) {
-        setState(() => _currentPosition = position);
-        return;
-      }
+        // Deteksi lanjut otomatis dari Auto-Pause saat kecepatan atau perpindahan nyata kembali terdeteksi
+        if (_isAutoPaused) {
+          final movedFromLast = _routePoints.isEmpty
+              ? 0.0
+              : Geolocator.distanceBetween(
+                  _routePoints.last.latitude,
+                  _routePoints.last.longitude,
+                  newLatLng.latitude,
+                  newLatLng.longitude,
+                );
+          if (position.speed >= 0.7 || (movedFromLast >= 5.0 && movedFromLast <= 40.0)) {
+            _stationarySeconds = 0;
+            _lastMovementTime = now;
+            HapticFeedback.mediumImpact();
+            setState(() => _isAutoPaused = false);
+          }
+        }
 
-      final newLatLng = LatLng(position.latitude, position.longitude);
+        if (_effectivelyPaused) {
+          setState(() => _currentPosition = position);
+          return;
+        }
 
-      if (_routePoints.isNotEmpty) {
-        final lastLatLng = _routePoints.last;
-        final distance = Geolocator.distanceBetween(
-          lastLatLng.latitude,
-          lastLatLng.longitude,
-          newLatLng.latitude,
-          newLatLng.longitude,
-        );
-
-        if (distance >= 3.0) {
-          _stationarySeconds = 0;
-          _totalDistanceInMeters += distance;
+        // Jika baru saja melanjutkan dari Pause manual, jadikan titik ini anchor baru tanpa menghitung jarak selama jeda
+        if (_isResumingSegment) {
+          _isResumingSegment = false;
+          _lastValidPointTime = now;
+          _lastMovementTime = now;
+          _lastAltitudeAnchor = position.altitude.abs() > 0.01 ? position.altitude : null;
           setState(() {
             _currentPosition = position;
-            _routePoints.add(newLatLng);
+            _recordTrackPoint(position, newLatLng);
           });
-        } else {
-          setState(() => _currentPosition = position);
+          if (_autoFollowCamera) {
+            _mapController.move(newLatLng, 17.0);
+          }
+          return;
         }
-      } else {
-        setState(() {
-          _currentPosition = position;
-          _routePoints.add(newLatLng);
-        });
-      }
 
-      if (_autoFollowCamera) {
-        _mapController.move(newLatLng, 17.0);
-      }
-    });
+        if (_routePoints.isNotEmpty) {
+          final lastLatLng = _routePoints.last;
+          final distance = Geolocator.distanceBetween(
+            lastLatLng.latitude,
+            lastLatLng.longitude,
+            newLatLng.latitude,
+            newLatLng.longitude,
+          );
+
+          final elapsedSinceLastSec = _lastValidPointTime == null
+              ? 2.0
+              : (now.difference(_lastValidPointTime!).inMilliseconds / 1000.0).clamp(1.0, 3600.0);
+          final impliedSpeedMs = distance / elapsedSinceLastSec;
+
+          // Filter jitter (< 3m) dan filter GPS teleport/spike (> 12.5 m/s atau ~45 km/jam)
+          if (distance >= 3.0 && impliedSpeedMs <= _maxValidRunningSpeedMs) {
+            _stationarySeconds = 0;
+            _lastValidPointTime = now;
+            _lastMovementTime = now;
+            _totalDistanceInMeters += distance;
+            setState(() {
+              _currentPosition = position;
+              _recordTrackPoint(position, newLatLng);
+            });
+          } else {
+            setState(() => _currentPosition = position);
+          }
+        } else {
+          _lastValidPointTime = now;
+          _lastMovementTime = now;
+          setState(() {
+            _currentPosition = position;
+            _recordTrackPoint(position, newLatLng);
+          });
+        }
+
+        if (_autoFollowCamera) {
+          _mapController.move(newLatLng, 17.0);
+        }
+      },
+      onError: (Object error) {
+        debugPrint('GPS stream error: $error');
+      },
+    );
 
     _stepSub?.cancel();
-    _lastRawStreamSteps = 0;
-    _stepSub = _pedometerService.getStepCountStream().listen((int steps) {
-      if (!mounted || _effectivelyPaused) return;
-      _lastRawStreamSteps = steps;
-      setState(() => _stepCount = _stepOffsetBeforePause + steps);
-    });
+    _lastSensorSteps = null;
+    _stepSub = _pedometerService.getRawStepCountStream().listen(
+      (int rawSteps) {
+        if (!mounted) return;
+        if (_lastSensorSteps == null) {
+          _lastSensorSteps = rawSteps;
+          return;
+        }
+
+        final int delta = rawSteps - _lastSensorSteps!;
+        _lastSensorSteps = rawSteps;
+
+        // Hanya tambahkan delta langkah saat tidak dijeda (Pause maupun Auto-Pause)
+        if (delta > 0 && !_effectivelyPaused) {
+          setState(() => _stepCount += delta);
+        }
+      },
+      onError: (Object error) {
+        debugPrint('Pedometer stream error: $error');
+      },
+    );
   }
 
   Future<void> _initiateCountdownAndStart() async {
@@ -293,19 +405,29 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
   }
 
   void _beginActualRecording() {
+    final now = DateTime.now();
     setState(() {
       _isTracking = true;
       _isPaused = false;
       _isAutoPaused = false;
+      _isResumingSegment = false;
       _stationarySeconds = 0;
+      _lastValidPointTime = now;
+      _lastMovementTime = now;
       _autoFollowCamera = true;
       _routePoints.clear();
+      _trackPoints.clear();
       _totalDistanceInMeters = 0.0;
+      _elevationGainM = 0.0;
+      _lastAltitudeAnchor = null;
       _stepCount = 0;
-      _stepOffsetBeforePause = 0;
+      _lastSensorSteps = null;
       _elapsedSeconds = 0;
       if (_currentPosition != null) {
-        _routePoints.add(LatLng(_currentPosition!.latitude, _currentPosition!.longitude));
+        _recordTrackPoint(
+          _currentPosition!,
+          LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+        );
       }
     });
 
@@ -315,10 +437,13 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
   void _resumeFromPause() {
     HapticFeedback.mediumImpact();
+    final now = DateTime.now();
     setState(() {
       _isPaused = false;
       _isAutoPaused = false;
+      _isResumingSegment = true;
       _stationarySeconds = 0;
+      _lastMovementTime = now;
       _autoFollowCamera = true;
     });
     _startStreams();
@@ -327,9 +452,10 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
   void _pauseTracking() {
     HapticFeedback.mediumImpact();
     _positionSub?.cancel();
+    _positionSub = null;
     _stepSub?.cancel();
-    _stepOffsetBeforePause += _lastRawStreamSteps;
-    _lastRawStreamSteps = 0;
+    _stepSub = null;
+    _lastSensorSteps = null;
     setState(() {
       _isPaused = true;
       _isAutoPaused = false;
@@ -348,14 +474,16 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
     final bool? didSave = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => _PostRunActivityScreen(
-          defaultTitle: _currentMode.defaultTitle,
+        builder: (_) => PostRunActivityScreen(
+          defaultTitle: _guidedRoute?.name ?? _currentMode.defaultTitle,
           distanceInKm: _totalDistanceInMeters / 1000,
           durationInSeconds: _elapsedSeconds,
           pace: _calculatePace(),
           steps: _stepCount,
           calories: _estimatedCalories,
+          elevationGainM: _elevationGainM,
           routePoints: List.from(_routePoints),
+          trackPoints: List.from(_trackPoints),
         ),
       ),
     );
@@ -416,12 +544,17 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
   void _resetStats() {
     setState(() {
       _routePoints.clear();
+      _trackPoints.clear();
       _totalDistanceInMeters = 0.0;
+      _elevationGainM = 0.0;
+      _lastAltitudeAnchor = null;
       _stepCount = 0;
-      _stepOffsetBeforePause = 0;
-      _lastRawStreamSteps = 0;
+      _lastSensorSteps = null;
       _elapsedSeconds = 0;
       _stationarySeconds = 0;
+      _isResumingSegment = false;
+      _lastValidPointTime = null;
+      _lastMovementTime = null;
       _isTracking = false;
       _isPaused = false;
       _isAutoPaused = false;
@@ -443,6 +576,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
             options: MapOptions(
               initialCenter: currentLatLng,
               initialZoom: 17.0,
+              backgroundColor: AppColors.backgroundDark,
               onPositionChanged: (position, hasGesture) {
                 if (hasGesture && _autoFollowCamera) {
                   setState(() => _autoFollowCamera = false);
@@ -450,23 +584,15 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
               },
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.adventure_runner',
-                tileBuilder: (context, tileWidget, tile) {
-                  return ColorFiltered(
-                    colorFilter: const ColorFilter.matrix([
-                      -1.0,  0.0,  0.0, 0.0, 255.0,
-                       0.0, -1.0,  0.0, 0.0, 255.0,
-                       0.0,  0.0, -1.0, 0.0, 255.0,
-                       0.0,  0.0,  0.0, 1.0,   0.0,
-                    ]),
-                    child: tileWidget,
-                  );
-                },
-              ),
+              const DarkOsmTileLayer(),
               PolylineLayer(
                 polylines: [
+                  if (_guidedRoute != null && _guidedRoute!.points.length >= 2)
+                    Polyline(
+                      points: _guidedRoute!.points,
+                      strokeWidth: 4.5,
+                      color: _guidedRoute!.color.withValues(alpha: 0.65),
+                    ),
                   Polyline(
                     points: _routePoints,
                     strokeWidth: 5.5,
@@ -496,7 +622,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                       height: 44,
                       child: Container(
                         decoration: BoxDecoration(
-                          color: AppColors.primaryOrange.withOpacity(0.25),
+                          color: AppColors.primaryOrange.withValues(alpha: 0.25),
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 2),
                         ),
@@ -535,7 +661,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   decoration: BoxDecoration(
-                    color: AppColors.cardDark.withOpacity(0.92),
+                    color: AppColors.cardDark.withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: Colors.white12),
                   ),
@@ -550,7 +676,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                       const SizedBox(width: 5),
                       Text(
                         _currentPosition != null
-                            ? 'GPS ±${_currentPosition!.accuracy.toStringAsFixed(0)}m'
+                            ? 'GPS Â±${_currentPosition!.accuracy.toStringAsFixed(0)}m'
                             : 'Mencari GPS...',
                         style: TextStyle(
                           fontSize: 11,
@@ -572,10 +698,10 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                     decoration: BoxDecoration(
-                      color: AppColors.cardDark.withOpacity(0.92),
+                      color: AppColors.cardDark.withValues(alpha: 0.92),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: _autoPauseEnabled ? AppColors.accentBlue.withOpacity(0.6) : Colors.white12,
+                        color: _autoPauseEnabled ? AppColors.accentBlue.withValues(alpha: 0.6) : Colors.white12,
                       ),
                     ),
                     child: Row(
@@ -602,7 +728,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                   decoration: BoxDecoration(
-                    color: AppColors.cardDark.withOpacity(0.92),
+                    color: AppColors.cardDark.withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: Colors.white12),
                   ),
@@ -620,6 +746,45 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                 ),
               ],
             ),
+          ),
+
+          if (_guidedRoute != null)
+            Positioned(
+              top: 94,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.cardDark.withValues(alpha: 0.94),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: _guidedRoute!.color.withValues(alpha: 0.7)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.alt_route, size: 16, color: _guidedRoute!.color),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Panduan: ${_guidedRoute!.name} (${_guidedRoute!.distanceKm.toStringAsFixed(1)} km)',
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: GuidedRouteController.clearGuide,
+                      child: const Icon(Icons.close, size: 16, color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          const Positioned(
+            left: 16,
+            bottom: 265,
+            child: OsmAttributionBadge(),
           ),
 
           Positioned(
@@ -667,12 +832,12 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                       decoration: BoxDecoration(
-                        color: (_isAutoPaused ? AppColors.accentBlue : Colors.amber).withOpacity(0.2),
+                        color: (_isAutoPaused ? AppColors.accentBlue : Colors.amber).withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         _isAutoPaused
-                            ? 'AUTO-PAUSED (DIAM TERDETEKSI • LANJUT OTOMATIS)'
+                            ? 'AUTO-PAUSED (DIAM TERDETEKSI â€¢ LANJUT OTOMATIS)'
                             : 'SESI DIJEDA (PAUSED)',
                         style: TextStyle(
                           color: _isAutoPaused ? AppColors.accentBlue : Colors.amber,
@@ -694,7 +859,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceAround,
                       children: [
-                        _buildStravaMetric('WAKTU', _formatDuration(_elapsedSeconds)),
+                        _buildStravaMetric('WAKTU', AppFormatters.formatClockDuration(_elapsedSeconds)),
                         Container(height: 32, width: 1, color: Colors.white12),
                         _buildStravaMetric('PACE (/KM)', _calculatePace()),
                         Container(height: 32, width: 1, color: Colors.white12),
@@ -720,14 +885,14 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                                   color: AppColors.cardElevated,
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                    color: _isTracking ? Colors.transparent : AppColors.primaryOrange.withOpacity(0.5),
+                                    color: _isTracking ? Colors.transparent : AppColors.primaryOrange.withValues(alpha: 0.5),
                                   ),
                                 ),
                                 child: Icon(_currentMode.icon, color: AppColors.primaryOrange),
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                _isTracking ? _currentMode.name : '${_currentMode.name} ▾',
+                                _isTracking ? _currentMode.name : '${_currentMode.name} â–¾',
                                 style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.w600),
                               ),
                             ],
@@ -801,7 +966,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
           if (_countdownValue > 0)
             Container(
-              color: Colors.black.withOpacity(0.88),
+              color: Colors.black.withValues(alpha: 0.88),
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -829,7 +994,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           border: Border.all(color: AppColors.primaryOrange, width: 4),
-                          color: AppColors.primaryOrange.withOpacity(0.15),
+                          color: AppColors.primaryOrange.withValues(alpha: 0.15),
                         ),
                         child: Center(
                           child: Text(
@@ -877,7 +1042,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
           shape: BoxShape.circle,
           boxShadow: [
             BoxShadow(
-              color: color.withOpacity(0.4),
+              color: color.withValues(alpha: 0.4),
               blurRadius: 15,
               spreadRadius: 2,
             ),
@@ -900,452 +1065,6 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
           label,
           style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w600, letterSpacing: 0.5),
         ),
-      ],
-    );
-  }
-}
-
-class _PostRunActivityScreen extends StatefulWidget {
-  final String defaultTitle;
-  final double distanceInKm;
-  final int durationInSeconds;
-  final String pace;
-  final int steps;
-  final double calories;
-  final List<LatLng> routePoints;
-
-  const _PostRunActivityScreen({
-    required this.defaultTitle,
-    required this.distanceInKm,
-    required this.durationInSeconds,
-    required this.pace,
-    required this.steps,
-    required this.calories,
-    required this.routePoints,
-  });
-
-  @override
-  State<_PostRunActivityScreen> createState() => _PostRunActivityScreenState();
-}
-
-class _PostRunActivityScreenState extends State<_PostRunActivityScreen> {
-  final RunStorageService _storageService = RunStorageService();
-  final ImagePicker _picker = ImagePicker();
-  final MapController _previewMapController = MapController();
-
-  late TextEditingController _titleController;
-  final TextEditingController _notesController = TextEditingController();
-
-  File? _selectedPhoto;
-  bool _isSaving = false;
-
-  final List<String> _feelings = const [
-    'Luar Biasa 🔥',
-    'Santai & Segar 🌿',
-    'Kuat & Stabil 💪',
-    'Tanjakan Berat ⛰️',
-    'Pecah Rekor ⚡',
-  ];
-  String _selectedFeeling = 'Luar Biasa 🔥';
-
-  @override
-  void initState() {
-    super.initState();
-    _titleController = TextEditingController(text: widget.defaultTitle);
-  }
-
-  @override
-  void dispose() {
-    _titleController.dispose();
-    _notesController.dispose();
-    super.dispose();
-  }
-
-  void _fitPreviewMap() {
-    if (widget.routePoints.length >= 2) {
-      final bounds = LatLngBounds.fromPoints(widget.routePoints);
-      _previewMapController.fitCamera(
-        CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(28)),
-      );
-    } else if (widget.routePoints.isNotEmpty) {
-      _previewMapController.move(widget.routePoints.first, 16.0);
-    }
-  }
-
-  Future<void> _pickActivityPhoto(ImageSource source) async {
-    try {
-      final XFile? picked = await _picker.pickImage(
-        source: source,
-        maxWidth: 1080,
-        maxHeight: 1080,
-        imageQuality: 85,
-      );
-      if (picked != null && mounted) {
-        setState(() => _selectedPhoto = File(picked.path));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Gagal memuat foto: $e'), backgroundColor: Colors.redAccent),
-        );
-      }
-    }
-  }
-
-  Future<void> _saveAndPost() async {
-    if (_isSaving) return;
-    setState(() => _isSaving = true);
-
-    String? savedPhotoPath;
-    if (_selectedPhoto != null) {
-      savedPhotoPath = await _storageService.saveRunPhoto(_selectedPhoto!);
-    }
-
-    final now = DateTime.now();
-    final newRun = RunModel(
-      id: now.millisecondsSinceEpoch.toString(),
-      title: _titleController.text.trim().isEmpty ? widget.defaultTitle : _titleController.text.trim(),
-      date: "${now.day}/${now.month}/${now.year}",
-      distanceInKm: widget.distanceInKm,
-      durationInSeconds: widget.durationInSeconds,
-      pace: widget.pace,
-      steps: widget.steps,
-      calories: widget.calories,
-      routePoints: widget.routePoints,
-      notes: _notesController.text.trim(),
-      photoPath: savedPhotoPath,
-      feeling: _selectedFeeling,
-    );
-
-    await _storageService.saveRun(newRun);
-
-    if (mounted) {
-      Navigator.pop(context, true);
-    }
-  }
-
-  void _confirmDiscard() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.cardDark,
-        title: const Text('Buang Rekaman Lari?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: const Text('Data GPS dan statistik sesi ini tidak akan disimpan.', style: TextStyle(color: AppColors.textSecondary)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Kembali', style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () {
-              Navigator.pop(ctx);
-              Navigator.pop(context, false);
-            },
-            child: const Text('Buang', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _formatDuration(int totalSeconds) {
-    final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
-    final s = (totalSeconds % 60).toString().padLeft(2, '0');
-    final h = totalSeconds ~/ 3600;
-    return h > 0 ? '${h.toString().padLeft(2, '0')}:$m:$s' : '$m:$s';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final initialCenter = widget.routePoints.isNotEmpty
-        ? widget.routePoints.first
-        : const LatLng(-6.9311, 107.7733);
-
-    return Scaffold(
-      backgroundColor: AppColors.backgroundDark,
-      appBar: AppBar(
-        backgroundColor: AppColors.backgroundDark,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.close, color: Colors.white70),
-          onPressed: _confirmDiscard,
-        ),
-        title: const Text(
-          'Post Aktivitas',
-          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17, color: Colors.white),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12, top: 8, bottom: 8),
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryOrange,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: _isSaving ? null : _saveAndPost,
-              child: _isSaving
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Simpan & Post', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-            ),
-          ),
-        ],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: AppColors.cardDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              children: [
-                TextField(
-                  controller: _titleController,
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17),
-                  decoration: const InputDecoration(
-                    hintText: 'Judul lari (misal: Lari Pagi Keliling Unpad)',
-                    hintStyle: TextStyle(color: Colors.white38, fontWeight: FontWeight.normal),
-                    border: InputBorder.none,
-                  ),
-                ),
-                const Divider(color: Colors.white10),
-                TextField(
-                  controller: _notesController,
-                  maxLines: 3,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                  decoration: const InputDecoration(
-                    hintText: 'Ceritakan pengalaman larimu hari ini... Cuaca, rute, atau target berikutnya?',
-                    hintStyle: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                    border: InputBorder.none,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Bagaimana Rasanya Lari Ini?',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: _feelings.map((feeling) {
-                final isSelected = _selectedFeeling == feeling;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedFeeling = feeling),
-                  child: Container(
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isSelected ? AppColors.primaryOrange : AppColors.cardDark,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: isSelected ? AppColors.primaryOrange : Colors.white12),
-                    ),
-                    child: Text(
-                      feeling,
-                      style: TextStyle(
-                        color: isSelected ? Colors.white : Colors.white70,
-                        fontSize: 12,
-                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-          const SizedBox(height: 18),
-          const Text(
-            'Foto Momen Lari (Opsional)',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          const SizedBox(height: 8),
-          if (_selectedPhoto != null)
-            Stack(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.file(
-                    _selectedPhoto!,
-                    width: double.infinity,
-                    height: 220,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                Positioned(
-                  top: 10,
-                  right: 10,
-                  child: GestureDetector(
-                    onTap: () => setState(() => _selectedPhoto = null),
-                    child: Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(color: Colors.black87, shape: BoxShape.circle),
-                      child: const Icon(Icons.close, color: Colors.white, size: 18),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          else
-            Row(
-              children: [
-                Expanded(
-                  child: _buildPhotoButton(
-                    icon: Icons.photo_library_outlined,
-                    label: 'Pilih dari Galeri',
-                    onTap: () => _pickActivityPhoto(ImageSource.gallery),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _buildPhotoButton(
-                    icon: Icons.camera_alt_outlined,
-                    label: 'Ambil Foto',
-                    onTap: () => _pickActivityPhoto(ImageSource.camera),
-                  ),
-                ),
-              ],
-            ),
-          const SizedBox(height: 18),
-          const Text(
-            'Trek Rute GPS & Statistik',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: AppColors.cardDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              children: [
-                ClipRRect(
-                  borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                  child: SizedBox(
-                    height: 180,
-                    child: FlutterMap(
-                      mapController: _previewMapController,
-                      options: MapOptions(
-                        initialCenter: initialCenter,
-                        initialZoom: 15.5,
-                        onMapReady: _fitPreviewMap,
-                        interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
-                      ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.example.adventure_runner',
-                          tileBuilder: (context, tileWidget, tile) {
-                            return ColorFiltered(
-                              colorFilter: const ColorFilter.matrix([
-                                -1.0,  0.0,  0.0, 0.0, 255.0,
-                                 0.0, -1.0,  0.0, 0.0, 255.0,
-                                 0.0,  0.0, -1.0, 0.0, 255.0,
-                                 0.0,  0.0,  0.0, 1.0,   0.0,
-                              ]),
-                              child: tileWidget,
-                            );
-                          },
-                        ),
-                        if (widget.routePoints.length >= 2)
-                          PolylineLayer(
-                            polylines: [
-                              Polyline(
-                                points: widget.routePoints,
-                                strokeWidth: 4.5,
-                                color: AppColors.primaryOrange,
-                              ),
-                            ],
-                          ),
-                        if (widget.routePoints.isNotEmpty)
-                          MarkerLayer(
-                            markers: [
-                              Marker(
-                                point: widget.routePoints.first,
-                                width: 16,
-                                height: 16,
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.accentGreen,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(color: Colors.white, width: 2),
-                                  ),
-                                ),
-                              ),
-                              if (widget.routePoints.length >= 2)
-                                Marker(
-                                  point: widget.routePoints.last,
-                                  width: 16,
-                                  height: 16,
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.redAccent,
-                                      shape: BoxShape.circle,
-                                      border: Border.all(color: Colors.white, width: 2),
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: [
-                      _buildStatCol('JARAK', '${widget.distanceInKm.toStringAsFixed(2)} km'),
-                      _buildStatCol('WAKTU', _formatDuration(widget.durationInSeconds)),
-                      _buildStatCol('PACE', '${widget.pace} /km'),
-                      _buildStatCol('KALORI', '${widget.calories.toStringAsFixed(0)} kcal'),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPhotoButton({required IconData icon, required String label, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 18),
-        decoration: BoxDecoration(
-          color: AppColors.cardDark,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.primaryOrange.withOpacity(0.45)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: AppColors.primaryOrange, size: 26),
-            const SizedBox(height: 6),
-            Text(label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatCol(String label, String value) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 10)),
-        const SizedBox(height: 3),
-        Text(value, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5)),
       ],
     );
   }

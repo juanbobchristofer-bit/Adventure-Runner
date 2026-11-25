@@ -1,11 +1,13 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:latlong2/latlong.dart' hide Path;
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
+import '../../../core/utils/formatters.dart';
+import '../../../core/widgets/mini_route_painter.dart';
 import '../domain/run_model.dart';
+import '../domain/runner_stats.dart';
 import 'run_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -20,13 +22,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final ProfileStorageService _profileService = ProfileStorageService();
 
   List<RunModel> _savedRuns = [];
-  UserProfileData _profile = const UserProfileData(
-    name: 'Pelari Adventure',
-    bio: 'Chasing new personal records every mile.',
-    city: 'Jatinangor, Indonesia',
-    weightKg: 65.0,
-    weeklyGoalKm: 15.0,
-  );
+  Set<String> _validPhotoRunIds = {};
+  UserProfileData _profile = UserProfileData.defaultProfile;
   bool _isLoading = true;
 
   @override
@@ -34,44 +31,41 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _loadRunsAndProfile();
     ProfileStorageService.profileUpdateNotifier.addListener(_loadRunsAndProfile);
+    RunStorageService.runUpdateNotifier.addListener(_loadRunsAndProfile);
   }
 
   @override
   void dispose() {
     ProfileStorageService.profileUpdateNotifier.removeListener(_loadRunsAndProfile);
+    RunStorageService.runUpdateNotifier.removeListener(_loadRunsAndProfile);
     super.dispose();
   }
 
   Future<void> _loadRunsAndProfile() async {
     final runs = await _storageService.getSavedRuns();
     final profile = await _profileService.getProfile();
+    final validPhotos = <String>{};
+    for (final run in runs) {
+      if (run.photoPath != null && await File(run.photoPath!).exists()) {
+        validPhotos.add(run.id);
+      }
+    }
     if (mounted) {
       setState(() {
         _savedRuns = runs;
+        _validPhotoRunIds = validPhotos;
         _profile = profile;
         _isLoading = false;
       });
     }
   }
 
-  double get _totalDistance => _savedRuns.fold(0.0, (sum, item) => sum + item.distanceInKm);
-  int get _totalSeconds => _savedRuns.fold(0, (sum, item) => sum + item.durationInSeconds);
-  double get _totalCalories => _savedRuns.fold(0.0, (sum, item) => sum + item.calories);
+  double get _totalDistance => RunnerStats.totalDistance(_savedRuns);
+  double get _weeklyDistance => RunnerStats.weeklyDistance(_savedRuns);
+  int get _totalSeconds => RunnerStats.totalDurationSeconds(_savedRuns);
+  double get _totalCalories => RunnerStats.totalCalories(_savedRuns);
 
-  String _formatTotalTime(int seconds) {
-    final int hours = seconds ~/ 3600;
-    final int minutes = (seconds % 3600) ~/ 60;
-    if (hours == 0) return '${minutes}m';
-    return '${hours}j ${minutes}m';
-  }
-
-  String get _runnerRank {
-    if (_totalDistance >= 100) return 'ELITE MARATHONER';
-    if (_totalDistance >= 42) return 'TRAIL CONQUEROR';
-    if (_totalDistance >= 15) return 'CITY PACER';
-    if (_totalDistance > 0) return 'ACTIVE STRIDER';
-    return 'ROOKIE RUNNER';
-  }
+  String get _runnerRank => RunnerStats.rankTitle(_savedRuns, bonusXp: _profile.bonusXp);
 
   List<double> get _recentBarValues {
     if (_savedRuns.isEmpty) return List.filled(7, 0.0);
@@ -83,16 +77,16 @@ class _HomeScreenState extends State<HomeScreen> {
     return padded;
   }
 
-  void _showEditGoalDialog() {
+  Future<void> _showEditGoalDialog() async {
     final controller = TextEditingController(text: _profile.weeklyGoalKm.toStringAsFixed(0));
-    showDialog(
+    await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.cardDark,
         title: const Text('Target Jarak Lari (km)', style: TextStyle(color: Colors.white, fontSize: 16)),
         content: TextField(
           controller: controller,
-          keyboardType: TextInputType.number,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: const TextStyle(color: Colors.white),
           decoration: const InputDecoration(
             hintText: 'Contoh: 20',
@@ -109,10 +103,19 @@ class _HomeScreenState extends State<HomeScreen> {
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
             onPressed: () async {
-              final val = double.tryParse(controller.text);
-              if (val != null && val > 0) {
-                await _profileService.saveWeeklyGoal(val);
+              final val = double.tryParse(controller.text.replaceAll(',', '.').trim());
+              if (val == null || val <= 0 || val > 1000) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Masukkan target jarak antara 1 - 1000 km.'),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+                return;
               }
+              await _profileService.saveWeeklyGoal(val);
               if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Simpan', style: TextStyle(color: Colors.white)),
@@ -120,11 +123,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+    controller.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final double goalProgress = (_totalDistance / _profile.weeklyGoalKm).clamp(0.0, 1.0);
+    final double safeGoalKm = _profile.weeklyGoalKm > 0 ? _profile.weeklyGoalKm : 15.0;
+    final double goalProgress = (_weeklyDistance / safeGoalKm).clamp(0.0, 1.0);
 
     return Scaffold(
       backgroundColor: AppColors.backgroundDark,
@@ -212,11 +217,36 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: Dismissible(
                                   key: Key(run.id),
                                   direction: DismissDirection.endToStart,
+                                  confirmDismiss: (_) async {
+                                    return await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            backgroundColor: AppColors.cardDark,
+                                            title: const Text('Hapus Aktivitas?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                            content: Text(
+                                              'Hapus "${run.title}" secara permanen dari riwayat?',
+                                              style: const TextStyle(color: AppColors.textSecondary),
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () => Navigator.pop(ctx, false),
+                                                child: const Text('Batal', style: TextStyle(color: Colors.grey)),
+                                              ),
+                                              ElevatedButton(
+                                                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                                                onPressed: () => Navigator.pop(ctx, true),
+                                                child: const Text('Hapus', style: TextStyle(color: Colors.white)),
+                                              ),
+                                            ],
+                                          ),
+                                        ) ??
+                                        false;
+                                  },
                                   background: Container(
                                     alignment: Alignment.centerRight,
                                     padding: const EdgeInsets.only(right: 22),
                                     decoration: BoxDecoration(
-                                      color: Colors.redAccent.withOpacity(0.9),
+                                      color: Colors.redAccent.withValues(alpha: 0.9),
                                       borderRadius: BorderRadius.circular(16),
                                     ),
                                     child: const Column(
@@ -264,7 +294,7 @@ class _HomeScreenState extends State<HomeScreen> {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.primaryOrange.withOpacity(0.35), width: 1),
+        border: Border.all(color: AppColors.primaryOrange.withValues(alpha: 0.35), width: 1),
       ),
       child: Column(
         children: [
@@ -299,7 +329,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: AppColors.primaryOrange.withOpacity(0.2),
+                        color: AppColors.primaryOrange.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
@@ -325,7 +355,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Row(
                         children: [
                           Text(
-                            'Target: ${_totalDistance.toStringAsFixed(1)} / ${_profile.weeklyGoalKm.toStringAsFixed(0)} km (${(goalProgress * 100).toInt()}%)',
+                            'Target Minggu Ini: ${_weeklyDistance.toStringAsFixed(1)} / ${_profile.weeklyGoalKm.toStringAsFixed(0)} km (${(goalProgress * 100).toInt()}%)',
                             style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
                           ),
                           const SizedBox(width: 4),
@@ -345,7 +375,7 @@ class _HomeScreenState extends State<HomeScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               _buildMetricPill(Icons.straighten, 'Total Jarak', '${_totalDistance.toStringAsFixed(2)} km', AppColors.primaryOrange),
-              _buildMetricPill(Icons.timer_outlined, 'Total Waktu', _formatTotalTime(_totalSeconds), AppColors.accentBlue),
+              _buildMetricPill(Icons.timer_outlined, 'Total Waktu', AppFormatters.formatCompactDuration(_totalSeconds), AppColors.accentBlue),
               _buildMetricPill(Icons.local_fire_department_outlined, 'Kalori', '${_totalCalories.toStringAsFixed(0)} kcal', AppColors.accentGreen),
             ],
           ),
@@ -443,7 +473,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           colors: isLatest
                               ? [AppColors.primaryOrange, AppColors.primaryOrangeLight]
                               : val > 0
-                                  ? [AppColors.primaryOrange.withOpacity(0.45), AppColors.primaryOrange.withOpacity(0.75)]
+                                  ? [AppColors.primaryOrange.withValues(alpha: 0.45), AppColors.primaryOrange.withValues(alpha: 0.75)]
                                   : [Colors.white10, Colors.white10],
                         ),
                       ),
@@ -466,7 +496,7 @@ class _HomeScreenState extends State<HomeScreen> {
         : run.distanceInKm >= 5
             ? '5K RUN'
             : 'DAILY RUN';
-    final bool hasPhoto = run.photoPath != null && File(run.photoPath!).existsSync();
+    final bool hasPhoto = run.photoPath != null && _validPhotoRunIds.contains(run.id);
     final bool hasUserAvatar = _profile.avatarPath != null;
 
     return GestureDetector(
@@ -506,7 +536,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.white),
                       ),
                       Text(
-                        '${run.date} • ${_profile.city}',
+                        '${run.date} â€¢ ${_profile.city}',
                         style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
                       ),
                     ],
@@ -515,7 +545,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: AppColors.primaryOrange.withOpacity(0.18),
+                    color: AppColors.primaryOrange.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
@@ -582,7 +612,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             Expanded(
                               child: SizedBox.expand(
-                                child: CustomPaint(painter: _MiniRoutePainter(run.routePoints)),
+                                child: CustomPaint(painter: MiniRoutePainter(run.routePoints)),
                               ),
                             ),
                             const SizedBox(height: 4),
@@ -609,7 +639,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Expanded(
                       child: CustomPaint(
                         size: const Size(double.infinity, 60),
-                        painter: _MiniRoutePainter(run.routePoints),
+                        painter: MiniRoutePainter(run.routePoints),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -632,7 +662,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 _buildCardStat('JARAK', '${run.distanceInKm.toStringAsFixed(2)} km'),
                 _buildCardStat('AVG PACE', '${run.pace} /km'),
-                _buildCardStat('DURASI', _formatTotalTime(run.durationInSeconds)),
+                _buildCardStat('DURASI', AppFormatters.formatCompactDuration(run.durationInSeconds)),
                 const Icon(Icons.chevron_right, color: AppColors.primaryOrange),
               ],
             ),
@@ -676,78 +706,4 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
-}
-
-class _MiniRoutePainter extends CustomPainter {
-  final List<LatLng> points;
-
-  _MiniRoutePainter(this.points);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (points.length < 2) {
-      final paint = Paint()
-        ..color = Colors.white24
-        ..strokeWidth = 2
-        ..style = PaintingStyle.stroke;
-      final path = Path()
-        ..moveTo(size.width * 0.2, size.height * 0.8)
-        ..quadraticBezierTo(size.width * 0.2, size.height * 0.2, size.width * 0.5, size.height * 0.5)
-        ..quadraticBezierTo(size.width * 0.8, size.height * 0.8, size.width * 0.8, size.height * 0.2);
-      canvas.drawPath(path, paint);
-      return;
-    }
-
-    double minLat = points.first.latitude;
-    double maxLat = points.first.latitude;
-    double minLng = points.first.longitude;
-    double maxLng = points.first.longitude;
-
-    for (final p in points) {
-      if (p.latitude < minLat) minLat = p.latitude;
-      if (p.latitude > maxLat) maxLat = p.latitude;
-      if (p.longitude < minLng) minLng = p.longitude;
-      if (p.longitude > maxLng) maxLng = p.longitude;
-    }
-
-    final double latSpan = (maxLat - minLat) == 0 ? 0.0001 : (maxLat - minLat);
-    final double lngSpan = (maxLng - minLng) == 0 ? 0.0001 : (maxLng - minLng);
-
-    final path = Path();
-    Offset? startOffset;
-    Offset? endOffset;
-
-    for (int i = 0; i < points.length; i++) {
-      final normX = (points[i].longitude - minLng) / lngSpan;
-      final normY = 1.0 - ((points[i].latitude - minLat) / latSpan);
-      final offset = Offset(normX * size.width, normY * size.height);
-
-      if (i == 0) {
-        path.moveTo(offset.dx, offset.dy);
-        startOffset = offset;
-      } else {
-        path.lineTo(offset.dx, offset.dy);
-        endOffset = offset;
-      }
-    }
-
-    final routePaint = Paint()
-      ..color = AppColors.primaryOrange
-      ..strokeWidth = 2.4
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
-
-    canvas.drawPath(path, routePaint);
-
-    if (startOffset != null) {
-      canvas.drawCircle(startOffset, 2.8, Paint()..color = AppColors.accentGreen);
-    }
-    if (endOffset != null) {
-      canvas.drawCircle(endOffset, 2.8, Paint()..color = Colors.white);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _MiniRoutePainter oldDelegate) => oldDelegate.points != points;
 }
