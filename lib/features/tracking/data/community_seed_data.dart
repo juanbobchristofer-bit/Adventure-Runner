@@ -33,6 +33,7 @@ class ClubMember {
   final String name;
   final double weeklyKm;
   final int runsCount;
+  final int runnerLevel;
   final bool isCurrentUser;
   final String? avatarPath;
 
@@ -40,6 +41,7 @@ class ClubMember {
     required this.name,
     required this.weeklyKm,
     required this.runsCount,
+    this.runnerLevel = 1,
     this.isCurrentUser = false,
     this.avatarPath,
   });
@@ -51,6 +53,7 @@ class RunningClub {
   final String location;
   final String description;
   final String schedule;
+  final int minLevel;
   final int baseMembers;
   final IconData icon;
   final Color color;
@@ -62,6 +65,7 @@ class RunningClub {
     required this.location,
     required this.description,
     required this.schedule,
+    this.minLevel = 1,
     required this.baseMembers,
     required this.icon,
     required this.color,
@@ -168,15 +172,16 @@ class CommunitySeedData {
       location: 'Jatinangor & Sumedang',
       description: 'Komunitas lari terbuka untuk mahasiswa dan warga kawasan Jatinangor–Sumedang.',
       schedule: 'Rabu 19:30 & Minggu 06:00',
+      minLevel: 1,
       baseMembers: 117,
       icon: Icons.directions_run,
       color: AppColors.primaryOrange,
       simulatedMembers: [
-        ClubMember(name: 'Raka Pratama', weeklyKm: 24.5, runsCount: 5),
-        ClubMember(name: 'Nadia Putri', weeklyKm: 18.2, runsCount: 4),
-        ClubMember(name: 'Dimas Saputra', weeklyKm: 12.0, runsCount: 3),
-        ClubMember(name: 'Fajar Nugroho', weeklyKm: 6.4, runsCount: 2),
-        ClubMember(name: 'Salsa Maharani', weeklyKm: 3.1, runsCount: 1),
+        ClubMember(name: 'Raka Pratama', weeklyKm: 24.5, runsCount: 5, runnerLevel: 5),
+        ClubMember(name: 'Nadia Putri', weeklyKm: 18.2, runsCount: 4, runnerLevel: 4),
+        ClubMember(name: 'Dimas Saputra', weeklyKm: 12.0, runsCount: 3, runnerLevel: 3),
+        ClubMember(name: 'Fajar Nugroho', weeklyKm: 6.4, runsCount: 2, runnerLevel: 2),
+        ClubMember(name: 'Salsa Maharani', weeklyKm: 3.1, runsCount: 1, runnerLevel: 1),
       ],
     ),
     RunningClub(
@@ -185,14 +190,15 @@ class CommunitySeedData {
       location: 'Cileunyi & Kaki Manglayang',
       description: 'Fokus latihan elevasi, lari lintas alam, dan persiapan trail run Jawa Barat.',
       schedule: 'Sabtu 06:15 • Basecamp Manglayang',
+      minLevel: 2,
       baseMembers: 430,
       icon: Icons.terrain,
       color: AppColors.accentGreen,
       simulatedMembers: [
-        ClubMember(name: 'Bagas Wicaksono', weeklyKm: 34.8, runsCount: 6),
-        ClubMember(name: 'Tari Anggraini', weeklyKm: 21.0, runsCount: 4),
-        ClubMember(name: 'Reza Kurniawan', weeklyKm: 14.5, runsCount: 3),
-        ClubMember(name: 'Kevin Wijaya', weeklyKm: 7.5, runsCount: 2),
+        ClubMember(name: 'Bagas Wicaksono', weeklyKm: 34.8, runsCount: 6, runnerLevel: 7),
+        ClubMember(name: 'Tari Anggraini', weeklyKm: 21.0, runsCount: 4, runnerLevel: 5),
+        ClubMember(name: 'Reza Kurniawan', weeklyKm: 14.5, runsCount: 3, runnerLevel: 3),
+        ClubMember(name: 'Kevin Wijaya', weeklyKm: 7.5, runsCount: 2, runnerLevel: 2),
       ],
     ),
     RunningClub(
@@ -201,14 +207,15 @@ class CommunitySeedData {
       location: 'Kawasan Kampus Jatinangor',
       description: 'Grup lari pagi santai sebelum kuliah dengan berbagai kelompok pace (5:30 – 7:30/km).',
       schedule: 'Selasa & Jumat • 05:45 WIB',
+      minLevel: 1,
       baseMembers: 264,
       icon: Icons.speed,
       color: AppColors.accentBlue,
       simulatedMembers: [
-        ClubMember(name: 'Alvin Hendrawan', weeklyKm: 19.6, runsCount: 5),
-        ClubMember(name: 'Citra Lestari', weeklyKm: 15.1, runsCount: 4),
-        ClubMember(name: 'Gilang Ramadhan', weeklyKm: 9.8, runsCount: 2),
-        ClubMember(name: 'Hana Pertiwi', weeklyKm: 4.2, runsCount: 1),
+        ClubMember(name: 'Alvin Hendrawan', weeklyKm: 19.6, runsCount: 5, runnerLevel: 4),
+        ClubMember(name: 'Citra Lestari', weeklyKm: 15.1, runsCount: 4, runnerLevel: 3),
+        ClubMember(name: 'Gilang Ramadhan', weeklyKm: 9.8, runsCount: 2, runnerLevel: 2),
+        ClubMember(name: 'Hana Pertiwi', weeklyKm: 4.2, runsCount: 1, runnerLevel: 1),
       ],
     ),
   ];

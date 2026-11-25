@@ -73,7 +73,7 @@ create table if not exists public.challenge_participants (
   primary key (challenge_id, user_id)
 );
 
--- 3. CLUBS & MEMBERS (Klub lari online + Leaderboard Mingguan)
+-- 3. CLUBS, MEMBERS & CHAT (Klub lari online berlevel + Leaderboard + Live Chat)
 create table if not exists public.clubs (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -81,6 +81,7 @@ create table if not exists public.clubs (
   description text not null,
   schedule text not null,
   color_hex text not null default '#FC4C02',
+  min_level integer not null default 1,
   created_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
@@ -91,6 +92,17 @@ create table if not exists public.club_members (
   joined_at timestamptz not null default now(),
   primary key (club_id, user_id)
 );
+
+create table if not exists public.club_messages (
+  id uuid primary key default gen_random_uuid(),
+  club_id uuid not null references public.clubs(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  content text not null check (char_length(trim(content)) > 0 and char_length(content) <= 500),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_club_messages_club_created
+  on public.club_messages(club_id, created_at asc);
 
 -- 4. COMMUNITY EVENTS & RSVPS (Acara lari komunitas online)
 create table if not exists public.community_events (
@@ -123,6 +135,7 @@ grant select on
   public.challenge_participants,
   public.clubs,
   public.club_members,
+  public.club_messages,
   public.community_events,
   public.event_rsvps
 to anon, authenticated;
@@ -131,6 +144,7 @@ grant insert, update on public.profiles to authenticated;
 grant insert, update, delete on public.challenge_participants to authenticated;
 grant insert, update, delete on public.clubs to authenticated;
 grant insert, update, delete on public.club_members to authenticated;
+grant insert, delete on public.club_messages to authenticated;
 grant insert, update, delete on public.community_events to authenticated;
 grant insert, update, delete on public.event_rsvps to authenticated;
 
@@ -142,6 +156,7 @@ alter table public.challenges enable row level security;
 alter table public.challenge_participants enable row level security;
 alter table public.clubs enable row level security;
 alter table public.club_members enable row level security;
+alter table public.club_messages enable row level security;
 alter table public.community_events enable row level security;
 alter table public.event_rsvps enable row level security;
 
@@ -208,6 +223,27 @@ drop policy if exists "Users can leave clubs" on public.club_members;
 create policy "Users can leave clubs"
   on public.club_members for delete using (auth.uid() = user_id);
 
+-- CLUB MESSAGES (Hanya anggota klub yang boleh mengirim pesan)
+drop policy if exists "Club messages are viewable by everyone" on public.club_messages;
+create policy "Club messages are viewable by everyone"
+  on public.club_messages for select using (true);
+
+drop policy if exists "Club members can send messages" on public.club_messages;
+create policy "Club members can send messages"
+  on public.club_messages for insert
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.club_members cm
+      where cm.club_id = club_messages.club_id
+        and cm.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "Users can delete own club messages" on public.club_messages;
+create policy "Users can delete own club messages"
+  on public.club_messages for delete using (auth.uid() = user_id);
+
 -- EVENTS
 drop policy if exists "Events are viewable by everyone" on public.community_events;
 create policy "Events are viewable by everyone"
@@ -251,12 +287,12 @@ on conflict (slug) do update set
   min_level = excluded.min_level,
   xp_reward = excluded.xp_reward;
 
-insert into public.clubs (id, name, location, description, schedule, color_hex)
+insert into public.clubs (id, name, location, description, schedule, color_hex, min_level)
 values
-  ('11111111-1111-1111-1111-111111111101', 'Runner Club Sumedang', 'Jatinangor & Sumedang', 'Komunitas lari terbuka untuk mahasiswa dan warga kawasan Jatinangor–Sumedang.', 'Rabu 19:30 & Minggu 06:00', '#FC4C02'),
-  ('11111111-1111-1111-1111-111111111102', 'Bandung Timur Trail Runners', 'Cileunyi & Kaki Manglayang', 'Fokus latihan elevasi, lari lintas alam, dan persiapan trail run Jawa Barat.', 'Sabtu 06:15 • Basecamp Manglayang', '#00E676'),
-  ('11111111-1111-1111-1111-111111111103', 'Adventure Runners Indonesia', 'Nasional • Online Club', 'Klub terbuka seluruh pelari Adventure Runner dari berbagai kota di Indonesia.', 'Bebas • Sync Mingguan', '#29B6F6')
-on conflict (id) do nothing;
+  ('11111111-1111-1111-1111-111111111101', 'Runner Club Sumedang', 'Jatinangor & Sumedang', 'Komunitas lari terbuka untuk mahasiswa dan warga kawasan Jatinangor–Sumedang.', 'Rabu 19:30 & Minggu 06:00', '#FC4C02', 1),
+  ('11111111-1111-1111-1111-111111111102', 'Bandung Timur Trail Runners', 'Cileunyi & Kaki Manglayang', 'Fokus latihan elevasi, lari lintas alam, dan persiapan trail run Jawa Barat.', 'Sabtu 06:15 • Basecamp Manglayang', '#00E676', 2),
+  ('11111111-1111-1111-1111-111111111103', 'Adventure Runners Indonesia', 'Nasional • Online Club', 'Klub terbuka seluruh pelari Adventure Runner dari berbagai kota di Indonesia.', 'Bebas • Sync Mingguan', '#29B6F6', 1)
+on conflict (id) do update set min_level = excluded.min_level;
 
 insert into public.community_events (id, title, date_str, location, distance_tag, pace_group, description)
 values

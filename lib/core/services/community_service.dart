@@ -44,6 +44,7 @@ class OnlineClubMember {
   final String city;
   final double weeklyKm;
   final int runsCount;
+  final int runnerLevel;
   final bool isCurrentUser;
 
   const OnlineClubMember({
@@ -52,6 +53,29 @@ class OnlineClubMember {
     required this.city,
     required this.weeklyKm,
     required this.runsCount,
+    this.runnerLevel = 1,
+    required this.isCurrentUser,
+  });
+}
+
+class ClubMessage {
+  final String id;
+  final String clubId;
+  final String userId;
+  final String senderName;
+  final int senderLevel;
+  final String content;
+  final DateTime createdAt;
+  final bool isCurrentUser;
+
+  const ClubMessage({
+    required this.id,
+    required this.clubId,
+    required this.userId,
+    required this.senderName,
+    this.senderLevel = 1,
+    required this.content,
+    required this.createdAt,
     required this.isCurrentUser,
   });
 }
@@ -63,6 +87,7 @@ class OnlineClub {
   final String description;
   final String schedule;
   final Color color;
+  final int minLevel;
   final int membersCount;
   final bool isJoined;
   final String? createdBy;
@@ -74,10 +99,29 @@ class OnlineClub {
     required this.description,
     required this.schedule,
     required this.color,
+    this.minLevel = 1,
     required this.membersCount,
     required this.isJoined,
     this.createdBy,
   });
+
+  OnlineClub copyWith({
+    int? membersCount,
+    bool? isJoined,
+  }) {
+    return OnlineClub(
+      id: id,
+      name: name,
+      location: location,
+      description: description,
+      schedule: schedule,
+      color: color,
+      minLevel: minLevel,
+      membersCount: membersCount ?? this.membersCount,
+      isJoined: isJoined ?? this.isJoined,
+      createdBy: createdBy,
+    );
+  }
 }
 
 class OnlineEvent {
@@ -238,6 +282,7 @@ class CommunityService {
 
       final clubs = rawClubs.map((c) {
         final id = c['id'].toString();
+        final minLevel = (c['min_level'] as num?)?.toInt() ?? 1;
         return OnlineClub(
           id: id,
           name: c['name']?.toString() ?? '',
@@ -245,11 +290,17 @@ class CommunityService {
           description: c['description']?.toString() ?? '',
           schedule: c['schedule']?.toString() ?? '',
           color: parseHexColor(c['color_hex']?.toString()),
+          minLevel: minLevel < 1 ? 1 : minLevel,
           membersCount: clubCounts[id] ?? 0,
           isJoined: myJoinedClubs.contains(id),
           createdBy: c['created_by']?.toString(),
         );
-      }).toList();
+      }).toList()
+        ..sort((a, b) {
+          final byLevel = a.minLevel.compareTo(b.minLevel);
+          if (byLevel != 0) return byLevel;
+          return b.membersCount.compareTo(a.membersCount);
+        });
 
       // Hitung RSVP & nama hadirin per acara
       final evCounts = <String, int>{};
@@ -316,7 +367,7 @@ class CommunityService {
     }
   }
 
-  /// Mengambil leaderboard mingguan LIVE seluruh anggota klub dari Supabase
+  /// Mengambil leaderboard mingguan LIVE seluruh anggota klub dari Supabase (termasuk badge Level)
   Future<List<OnlineClubMember>> fetchClubLeaderboard(String clubId) async {
     final supabase = AuthService.client;
     if (supabase == null) return [];
@@ -324,16 +375,26 @@ class CommunityService {
     final currentUid = AuthService.userId;
     final currentWeekIso = RunnerStats.startOfCurrentWeek().toIso8601String();
 
-    final raw = await supabase
-        .from('club_members')
-        .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso)')
-        .eq('club_id', clubId);
+    dynamic raw;
+    try {
+      raw = await supabase
+          .from('club_members')
+          .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso, runner_level)')
+          .eq('club_id', clubId);
+    } on PostgrestException {
+      // Fallback aman bila kolom runner_level belum dimigrasi
+      raw = await supabase
+          .from('club_members')
+          .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso)')
+          .eq('club_id', clubId);
+    }
 
     final members = <OnlineClubMember>[];
     for (final item in List<Map<String, dynamic>>.from(raw as List)) {
       final uid = item['user_id'].toString();
       final p = item['profiles'] is Map ? Map<String, dynamic>.from(item['profiles'] as Map) : <String, dynamic>{};
       final isCurrentWeek = p['week_start_iso']?.toString() == currentWeekIso;
+      final level = (p['runner_level'] as num?)?.toInt() ?? 1;
 
       members.add(
         OnlineClubMember(
@@ -344,6 +405,7 @@ class CommunityService {
           city: p['city']?.toString() ?? 'Indonesia',
           weeklyKm: isCurrentWeek ? ((p['weekly_distance_km'] as num?)?.toDouble() ?? 0.0) : 0.0,
           runsCount: isCurrentWeek ? ((p['weekly_runs_count'] as num?)?.toInt() ?? 0) : 0,
+          runnerLevel: level < 1 ? 1 : level,
           isCurrentUser: currentUid != null && uid == currentUid,
         ),
       );
@@ -351,6 +413,115 @@ class CommunityService {
 
     members.sort((a, b) => b.weeklyKm.compareTo(a.weeklyKm));
     return members;
+  }
+
+  /// Mengambil riwayat pesan ruang obrolan klub (60 pesan terbaru)
+  Future<List<ClubMessage>> fetchClubMessages(String clubId) async {
+    final supabase = AuthService.client;
+    if (supabase == null) return [];
+
+    final currentUid = AuthService.userId;
+
+    dynamic raw;
+    try {
+      raw = await supabase
+          .from('club_messages')
+          .select('id, club_id, user_id, content, created_at, profiles(display_name, runner_level)')
+          .eq('club_id', clubId)
+          .order('created_at', ascending: true)
+          .limit(60);
+    } on PostgrestException {
+      raw = await supabase
+          .from('club_messages')
+          .select('id, club_id, user_id, content, created_at, profiles(display_name)')
+          .eq('club_id', clubId)
+          .order('created_at', ascending: true)
+          .limit(60);
+    }
+
+    final messages = <ClubMessage>[];
+    for (final row in List<Map<String, dynamic>>.from(raw as List)) {
+      final uid = row['user_id'].toString();
+      final p = row['profiles'] is Map ? Map<String, dynamic>.from(row['profiles'] as Map) : <String, dynamic>{};
+      final level = (p['runner_level'] as num?)?.toInt() ?? 1;
+      messages.add(
+        ClubMessage(
+          id: row['id'].toString(),
+          clubId: row['club_id'].toString(),
+          userId: uid,
+          senderName: (p['display_name']?.toString().trim().isNotEmpty ?? false)
+              ? p['display_name'].toString()
+              : 'Pelari Adventure',
+          senderLevel: level < 1 ? 1 : level,
+          content: row['content']?.toString() ?? '',
+          createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
+          isCurrentUser: currentUid != null && uid == currentUid,
+        ),
+      );
+    }
+    return messages;
+  }
+
+  Future<void> sendClubMessage({
+    required String clubId,
+    required String content,
+  }) async {
+    final clean = content.trim();
+    if (clean.isEmpty) {
+      throw Exception('Pesan tidak boleh kosong.');
+    }
+    if (clean.length > 500) {
+      throw Exception('Pesan maksimal 500 karakter.');
+    }
+
+    final supabase = AuthService.client!;
+    final uid = AuthService.userId!;
+
+    await supabase.from('club_messages').insert({
+      'club_id': clubId,
+      'user_id': uid,
+      'content': clean,
+    });
+  }
+
+  Future<void> deleteClubMessage(String messageId) async {
+    final supabase = AuthService.client!;
+    final uid = AuthService.userId!;
+    await supabase.from('club_messages').delete().eq('id', messageId).eq('user_id', uid);
+  }
+
+  /// Berlangganan pembaruan live chat klub melalui Supabase Realtime
+  RealtimeChannel? subscribeToClubMessages({
+    required String clubId,
+    required VoidCallback onChange,
+  }) {
+    final supabase = AuthService.client;
+    if (supabase == null) return null;
+
+    final channel = supabase.channel('club_chat_$clubId');
+    channel
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'club_messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'club_id',
+            value: clubId,
+          ),
+          callback: (_) => onChange(),
+        )
+        .subscribe();
+    return channel;
+  }
+
+  Future<void> unsubscribeChannel(RealtimeChannel? channel) async {
+    final supabase = AuthService.client;
+    if (supabase != null && channel != null) {
+      try {
+        await supabase.removeChannel(channel);
+      } catch (_) {}
+    }
   }
 
   Future<void> toggleChallenge(
@@ -419,12 +590,20 @@ class CommunityService {
     return updatedBonusXp;
   }
 
-  Future<void> toggleClub(String clubId, {required bool currentlyJoined}) async {
+  Future<void> toggleClub(
+    String clubId, {
+    required bool currentlyJoined,
+    required int userLevel,
+    required int minLevel,
+  }) async {
     final supabase = AuthService.client!;
     final uid = AuthService.userId!;
     if (currentlyJoined) {
       await supabase.from('club_members').delete().eq('club_id', clubId).eq('user_id', uid);
     } else {
+      if (!RunnerStats.meetsLevelRequirement(userLevel: userLevel, minLevel: minLevel)) {
+        throw Exception('Level belum mencukupi. Klub ini membutuhkan minimal Level $minLevel.');
+      }
       await AuthService.syncLocalStatsToCloud();
       await supabase.from('club_members').upsert(
         {
@@ -442,23 +621,31 @@ class CommunityService {
     required String schedule,
     required String description,
     required String colorHex,
+    int minLevel = 1,
   }) async {
     final supabase = AuthService.client!;
     final uid = AuthService.userId!;
     await AuthService.syncLocalStatsToCloud();
 
-    final inserted = await supabase
-        .from('clubs')
-        .insert({
-          'name': name.trim(),
-          'location': location.trim(),
-          'schedule': schedule.trim(),
-          'description': description.trim(),
-          'color_hex': colorHex,
-          'created_by': uid,
-        })
-        .select('id')
-        .single();
+    final basePayload = <String, dynamic>{
+      'name': name.trim(),
+      'location': location.trim(),
+      'schedule': schedule.trim(),
+      'description': description.trim(),
+      'color_hex': colorHex,
+      'created_by': uid,
+    };
+
+    Map<String, dynamic> inserted;
+    try {
+      inserted = await supabase
+          .from('clubs')
+          .insert({...basePayload, 'min_level': minLevel < 1 ? 1 : minLevel})
+          .select('id')
+          .single();
+    } on PostgrestException {
+      inserted = await supabase.from('clubs').insert(basePayload).select('id').single();
+    }
 
     await supabase.from('club_members').upsert(
       {
