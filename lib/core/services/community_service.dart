@@ -124,6 +124,44 @@ class OnlineClub {
   }
 }
 
+class EventAttendee {
+  final String userId;
+  final String name;
+  final String city;
+  final int runnerLevel;
+  final bool isCurrentUser;
+
+  const EventAttendee({
+    required this.userId,
+    required this.name,
+    required this.city,
+    this.runnerLevel = 1,
+    required this.isCurrentUser,
+  });
+}
+
+class EventMessage {
+  final String id;
+  final String eventId;
+  final String userId;
+  final String senderName;
+  final int senderLevel;
+  final String content;
+  final DateTime createdAt;
+  final bool isCurrentUser;
+
+  const EventMessage({
+    required this.id,
+    required this.eventId,
+    required this.userId,
+    required this.senderName,
+    this.senderLevel = 1,
+    required this.content,
+    required this.createdAt,
+    required this.isCurrentUser,
+  });
+}
+
 class OnlineEvent {
   final String id;
   final String title;
@@ -132,6 +170,8 @@ class OnlineEvent {
   final String distanceTag;
   final String paceGroup;
   final String description;
+  final int minLevel;
+  final int maxParticipants;
   final int attendeesCount;
   final bool isAttending;
   final List<String> attendeeNames;
@@ -145,11 +185,36 @@ class OnlineEvent {
     required this.distanceTag,
     required this.paceGroup,
     required this.description,
+    this.minLevel = 1,
+    this.maxParticipants = 50,
     required this.attendeesCount,
     required this.isAttending,
     required this.attendeeNames,
     this.createdBy,
   });
+
+  bool get isFull => attendeesCount >= maxParticipants;
+
+  OnlineEvent copyWith({
+    int? attendeesCount,
+    bool? isAttending,
+  }) {
+    return OnlineEvent(
+      id: id,
+      title: title,
+      dateStr: dateStr,
+      location: location,
+      distanceTag: distanceTag,
+      paceGroup: paceGroup,
+      description: description,
+      minLevel: minLevel,
+      maxParticipants: maxParticipants,
+      attendeesCount: attendeesCount ?? this.attendeesCount,
+      isAttending: isAttending ?? this.isAttending,
+      attendeeNames: attendeeNames,
+      createdBy: createdBy,
+    );
+  }
 }
 
 class CommunitySnapshot {
@@ -320,6 +385,8 @@ class CommunityService {
 
       final events = rawEvents.map((e) {
         final id = e['id'].toString();
+        final minLevel = (e['min_level'] as num?)?.toInt() ?? 1;
+        final maxParticipants = (e['max_participants'] as num?)?.toInt() ?? 50;
         return OnlineEvent(
           id: id,
           title: e['title']?.toString() ?? '',
@@ -328,12 +395,15 @@ class CommunityService {
           distanceTag: e['distance_tag']?.toString() ?? '5.0 KM',
           paceGroup: e['pace_group']?.toString() ?? 'All Pace',
           description: e['description']?.toString() ?? '',
+          minLevel: minLevel < 1 ? 1 : minLevel,
+          maxParticipants: maxParticipants < 2 ? 2 : maxParticipants,
           attendeesCount: evCounts[id] ?? 0,
           isAttending: myRsvps.contains(id),
           attendeeNames: evNames[id] ?? const [],
           createdBy: e['created_by']?.toString(),
         );
-      }).toList();
+      }).toList()
+        ..sort((a, b) => a.minLevel.compareTo(b.minLevel));
 
       return CommunitySnapshot(
         isOnline: true,
@@ -656,12 +726,25 @@ class CommunityService {
     );
   }
 
-  Future<void> toggleEventRsvp(String eventId, {required bool currentlyAttending}) async {
+  Future<void> toggleEventRsvp(
+    String eventId, {
+    required bool currentlyAttending,
+    required int userLevel,
+    required int minLevel,
+    required int currentAttendeesCount,
+    required int maxParticipants,
+  }) async {
     final supabase = AuthService.client!;
     final uid = AuthService.userId!;
     if (currentlyAttending) {
       await supabase.from('event_rsvps').delete().eq('event_id', eventId).eq('user_id', uid);
     } else {
+      if (!RunnerStats.meetsLevelRequirement(userLevel: userLevel, minLevel: minLevel)) {
+        throw Exception('Level belum mencukupi. Acara ini membutuhkan minimal Level $minLevel.');
+      }
+      if (currentAttendeesCount >= maxParticipants) {
+        throw Exception('Maaf, kuota peserta acara ini sudah penuh ($maxParticipants/$maxParticipants).');
+      }
       await AuthService.syncLocalStatsToCloud();
       await supabase.from('event_rsvps').upsert(
         {
@@ -680,24 +763,37 @@ class CommunityService {
     required String distanceTag,
     required String paceGroup,
     required String description,
+    int minLevel = 1,
+    int maxParticipants = 50,
   }) async {
     final supabase = AuthService.client!;
     final uid = AuthService.userId!;
     await AuthService.syncLocalStatsToCloud();
 
-    final inserted = await supabase
-        .from('community_events')
-        .insert({
-          'title': title.trim(),
-          'date_str': dateStr.trim(),
-          'location': location.trim(),
-          'distance_tag': distanceTag.trim(),
-          'pace_group': paceGroup.trim(),
-          'description': description.trim(),
-          'created_by': uid,
-        })
-        .select('id')
-        .single();
+    final basePayload = <String, dynamic>{
+      'title': title.trim(),
+      'date_str': dateStr.trim(),
+      'location': location.trim(),
+      'distance_tag': distanceTag.trim(),
+      'pace_group': paceGroup.trim(),
+      'description': description.trim(),
+      'created_by': uid,
+    };
+
+    Map<String, dynamic> inserted;
+    try {
+      inserted = await supabase
+          .from('community_events')
+          .insert({
+            ...basePayload,
+            'min_level': minLevel < 1 ? 1 : minLevel,
+            'max_participants': maxParticipants.clamp(2, 500),
+          })
+          .select('id')
+          .single();
+    } on PostgrestException {
+      inserted = await supabase.from('community_events').insert(basePayload).select('id').single();
+    }
 
     await supabase.from('event_rsvps').upsert(
       {
@@ -706,5 +802,144 @@ class CommunityService {
       },
       ignoreDuplicates: true,
     );
+  }
+
+  /// Mengambil daftar lengkap peserta acara beserta level & kotanya
+  Future<List<EventAttendee>> fetchEventAttendees(String eventId) async {
+    final supabase = AuthService.client;
+    if (supabase == null) return [];
+
+    final currentUid = AuthService.userId;
+
+    dynamic raw;
+    try {
+      raw = await supabase
+          .from('event_rsvps')
+          .select('user_id, profiles(display_name, city, runner_level)')
+          .eq('event_id', eventId)
+          .order('rsvped_at', ascending: true);
+    } on PostgrestException {
+      raw = await supabase
+          .from('event_rsvps')
+          .select('user_id, profiles(display_name, city)')
+          .eq('event_id', eventId)
+          .order('rsvped_at', ascending: true);
+    }
+
+    final list = <EventAttendee>[];
+    for (final row in List<Map<String, dynamic>>.from(raw as List)) {
+      final uid = row['user_id'].toString();
+      final p = row['profiles'] is Map ? Map<String, dynamic>.from(row['profiles'] as Map) : <String, dynamic>{};
+      final level = (p['runner_level'] as num?)?.toInt() ?? 1;
+      list.add(
+        EventAttendee(
+          userId: uid,
+          name: (p['display_name']?.toString().trim().isNotEmpty ?? false)
+              ? p['display_name'].toString()
+              : 'Pelari Adventure',
+          city: p['city']?.toString() ?? 'Indonesia',
+          runnerLevel: level < 1 ? 1 : level,
+          isCurrentUser: currentUid != null && uid == currentUid,
+        ),
+      );
+    }
+    return list;
+  }
+
+  /// Mengambil riwayat pesan ruang diskusi acara (60 pesan terbaru)
+  Future<List<EventMessage>> fetchEventMessages(String eventId) async {
+    final supabase = AuthService.client;
+    if (supabase == null) return [];
+
+    final currentUid = AuthService.userId;
+
+    dynamic raw;
+    try {
+      raw = await supabase
+          .from('event_messages')
+          .select('id, event_id, user_id, content, created_at, profiles(display_name, runner_level)')
+          .eq('event_id', eventId)
+          .order('created_at', ascending: true)
+          .limit(60);
+    } on PostgrestException {
+      raw = await supabase
+          .from('event_messages')
+          .select('id, event_id, user_id, content, created_at, profiles(display_name)')
+          .eq('event_id', eventId)
+          .order('created_at', ascending: true)
+          .limit(60);
+    }
+
+    final list = <EventMessage>[];
+    for (final row in List<Map<String, dynamic>>.from(raw as List)) {
+      final uid = row['user_id'].toString();
+      final p = row['profiles'] is Map ? Map<String, dynamic>.from(row['profiles'] as Map) : <String, dynamic>{};
+      final level = (p['runner_level'] as num?)?.toInt() ?? 1;
+      list.add(
+        EventMessage(
+          id: row['id'].toString(),
+          eventId: row['event_id'].toString(),
+          userId: uid,
+          senderName: (p['display_name']?.toString().trim().isNotEmpty ?? false)
+              ? p['display_name'].toString()
+              : 'Pelari Adventure',
+          senderLevel: level < 1 ? 1 : level,
+          content: row['content']?.toString() ?? '',
+          createdAt: DateTime.tryParse(row['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
+          isCurrentUser: currentUid != null && uid == currentUid,
+        ),
+      );
+    }
+    return list;
+  }
+
+  Future<void> sendEventMessage({
+    required String eventId,
+    required String content,
+  }) async {
+    final clean = content.trim();
+    if (clean.isEmpty) {
+      throw Exception('Pesan tidak boleh kosong.');
+    }
+    if (clean.length > 500) {
+      throw Exception('Pesan maksimal 500 karakter.');
+    }
+    final supabase = AuthService.client!;
+    final uid = AuthService.userId!;
+    await supabase.from('event_messages').insert({
+      'event_id': eventId,
+      'user_id': uid,
+      'content': clean,
+    });
+  }
+
+  Future<void> deleteEventMessage(String messageId) async {
+    final supabase = AuthService.client!;
+    final uid = AuthService.userId!;
+    await supabase.from('event_messages').delete().eq('id', messageId).eq('user_id', uid);
+  }
+
+  RealtimeChannel? subscribeToEventMessages({
+    required String eventId,
+    required VoidCallback onChange,
+  }) {
+    final supabase = AuthService.client;
+    if (supabase == null) return null;
+
+    final channel = supabase.channel('event_chat_$eventId');
+    channel
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'event_messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'event_id',
+            value: eventId,
+          ),
+          callback: (_) => onChange(),
+        )
+        .subscribe();
+    return channel;
   }
 }

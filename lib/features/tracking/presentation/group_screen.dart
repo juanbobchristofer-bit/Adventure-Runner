@@ -13,6 +13,7 @@ import '../data/community_seed_data.dart';
 import '../domain/run_model.dart';
 import '../domain/runner_stats.dart';
 import 'club_detail_screen.dart';
+import 'event_detail_screen.dart';
 
 class GroupScreen extends StatefulWidget {
   const GroupScreen({super.key});
@@ -333,31 +334,78 @@ class _GroupScreenState extends State<GroupScreen> {
     _showSnack(joining ? 'Berhasil bergabung dengan klub (offline).' : 'Keluar dari klub.');
   }
 
-  // --- AKSI ACARA ---
+  // --- AKSI ACARA (SYARAT LEVEL + KUOTA PESERTA) ---
   Future<void> _handleToggleOnlineEvent(OnlineEvent ev) async {
+    if (!ev.isAttending) {
+      if (!RunnerStats.meetsLevelRequirement(userLevel: _userLevel, minLevel: ev.minLevel)) {
+        final xpMissing = RunnerStats.xpNeededForLevel(ev.minLevel, _userTotalXp);
+        _showSnack('Terkunci! Capai Level ${ev.minLevel} (kurang $xpMissing XP) untuk mengikuti acara ini.', isError: true);
+        return;
+      }
+      if (ev.isFull) {
+        _showSnack('Maaf, kuota peserta acara ini sudah penuh (${ev.maxParticipants}/${ev.maxParticipants}).', isError: true);
+        return;
+      }
+    }
     if (!await _ensureLoggedInForOnlineAction()) return;
     try {
       final attending = !ev.isAttending;
-      await _communityService.toggleEventRsvp(ev.id, currentlyAttending: ev.isAttending);
+      await _communityService.toggleEventRsvp(
+        ev.id,
+        currentlyAttending: ev.isAttending,
+        userLevel: _userLevel,
+        minLevel: ev.minLevel,
+        currentAttendeesCount: ev.attendeesCount,
+        maxParticipants: ev.maxParticipants,
+      );
       await _loadAllData();
-      _showSnack(attending ? 'Kehadiran dikonfirmasi! Sampai jumpa di garis start.' : 'RSVP acara dibatalkan.');
+      _showSnack(attending ? 'Kehadiran dikonfirmasi! Ruang diskusi acara kini terbuka.' : 'RSVP acara dibatalkan.');
     } catch (e) {
       _showSnack('Gagal memperbarui RSVP: $e', isError: true);
     }
   }
 
-  Future<void> _handleToggleOfflineEvent(String id) async {
+  Future<void> _handleToggleOfflineEvent(CommunityEvent ev) async {
+    final isAttending = _localRsvpEventIds.contains(ev.id);
+    if (!isAttending) {
+      if (!RunnerStats.meetsLevelRequirement(userLevel: _userLevel, minLevel: ev.minLevel)) {
+        final xpMissing = RunnerStats.xpNeededForLevel(ev.minLevel, _userTotalXp);
+        _showSnack('Terkunci! Capai Level ${ev.minLevel} (kurang $xpMissing XP) untuk mengikuti acara ini.', isError: true);
+        return;
+      }
+      if (ev.baseAttendees >= ev.maxParticipants) {
+        _showSnack('Maaf, kuota acara ini sudah penuh.', isError: true);
+        return;
+      }
+    }
     final prefs = await SharedPreferences.getInstance();
-    final attending = !_localRsvpEventIds.contains(id);
+    final attending = !isAttending;
     setState(() {
       if (attending) {
-        _localRsvpEventIds.add(id);
+        _localRsvpEventIds.add(ev.id);
       } else {
-        _localRsvpEventIds.remove(id);
+        _localRsvpEventIds.remove(ev.id);
       }
     });
     await prefs.setStringList(_prefRsvpEvents, _localRsvpEventIds.toList());
     _showSnack(attending ? 'Kehadiran dicatat secara lokal.' : 'RSVP dibatalkan.');
+  }
+
+  Future<void> _openOnlineEventDetail(OnlineEvent ev) async {
+    final changed = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EventDetailScreen(
+          event: ev,
+          userLevel: _userLevel,
+          userTotalXp: _userTotalXp,
+          userAvatarPath: _profile.avatarPath,
+        ),
+      ),
+    );
+    if (changed == true) {
+      await _loadAllData();
+    }
   }
 
   void _showSnack(String message, {bool isError = false}) {
@@ -537,8 +585,11 @@ class _GroupScreenState extends State<GroupScreen> {
     final locCtrl = TextEditingController(text: _profile.city);
     final distCtrl = TextEditingController(text: '5.0 KM');
     final paceCtrl = TextEditingController(text: 'All Pace');
+    final quotaCtrl = TextEditingController(text: '50');
     final descCtrl = TextEditingController();
+    int selectedMinLevel = 1;
     bool isSubmitting = false;
+    const levelOptions = [1, 2, 3, 5];
 
     await showModalBottomSheet<void>(
       context: context,
@@ -577,6 +628,34 @@ class _GroupScreenState extends State<GroupScreen> {
                   ],
                 ),
                 const SizedBox(height: 10),
+                _buildSheetField(quotaCtrl, 'Kuota Maksimal Peserta (contoh: 50)', Icons.people_outline, isNumber: true),
+                const SizedBox(height: 12),
+                Text(
+                  'Syarat Level Minimal (Maks. Lv. $_userLevel)',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: levelOptions.map((lvl) {
+                    final canSelect = lvl <= _userLevel;
+                    final isSelected = selectedMinLevel == lvl;
+                    return ChoiceChip(
+                      label: Text(lvl == 1 ? 'Lv. 1 (Terbuka)' : 'Min. Lv. $lvl'),
+                      selected: isSelected,
+                      onSelected: canSelect ? (_) => setSheetState(() => selectedMinLevel = lvl) : null,
+                      selectedColor: AppColors.primaryOrange,
+                      backgroundColor: AppColors.backgroundDark,
+                      disabledColor: Colors.white10,
+                      labelStyle: TextStyle(
+                        color: isSelected ? Colors.white : (canSelect ? Colors.white70 : Colors.white30),
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 10),
                 _buildSheetField(descCtrl, 'Deskripsi / info tambahan', Icons.notes, maxLines: 2),
                 const SizedBox(height: 18),
                 SizedBox(
@@ -591,6 +670,7 @@ class _GroupScreenState extends State<GroupScreen> {
                         ? null
                         : () async {
                             if (titleCtrl.text.trim().isEmpty) return;
+                            final parsedQuota = int.tryParse(quotaCtrl.text.trim()) ?? 50;
                             setSheetState(() => isSubmitting = true);
                             try {
                               await _communityService.createEvent(
@@ -602,6 +682,8 @@ class _GroupScreenState extends State<GroupScreen> {
                                 description: descCtrl.text.trim().isEmpty
                                     ? 'Lari santai bersama komunitas Adventure Runner.'
                                     : descCtrl.text,
+                                minLevel: selectedMinLevel,
+                                maxParticipants: parsedQuota.clamp(2, 500),
                               );
                               if (sheetCtx.mounted) Navigator.pop(sheetCtx);
                               await _loadAllData();
@@ -628,13 +710,21 @@ class _GroupScreenState extends State<GroupScreen> {
     locCtrl.dispose();
     distCtrl.dispose();
     paceCtrl.dispose();
+    quotaCtrl.dispose();
     descCtrl.dispose();
   }
 
-  Widget _buildSheetField(TextEditingController ctrl, String label, IconData icon, {int maxLines = 1}) {
+  Widget _buildSheetField(
+    TextEditingController ctrl,
+    String label,
+    IconData icon, {
+    int maxLines = 1,
+    bool isNumber = false,
+  }) {
     return TextField(
       controller: ctrl,
       maxLines: maxLines,
+      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
       style: const TextStyle(color: Colors.white, fontSize: 13.5),
       decoration: InputDecoration(
         labelText: label,
@@ -1701,9 +1791,13 @@ class _GroupScreenState extends State<GroupScreen> {
                   distanceTag: ev.distanceTag,
                   paceGroup: ev.paceGroup,
                   description: ev.description,
+                  minLevel: ev.minLevel,
+                  maxParticipants: ev.maxParticipants,
                   attendeesCount: ev.attendeesCount,
                   attendeeNames: ev.attendeeNames,
                   isAttending: ev.isAttending,
+                  hasDiscussion: true,
+                  onOpenDetail: () => _openOnlineEventDetail(ev),
                   onToggle: () => _handleToggleOnlineEvent(ev),
                 )),
           ],
@@ -1728,10 +1822,14 @@ class _GroupScreenState extends State<GroupScreen> {
             distanceTag: ev.distanceTag,
             paceGroup: ev.paceGroup,
             description: ev.description,
+            minLevel: ev.minLevel,
+            maxParticipants: ev.maxParticipants,
             attendeesCount: ev.baseAttendees + (isAttending ? 1 : 0),
             attendeeNames: const [],
             isAttending: isAttending,
-            onToggle: () => _handleToggleOfflineEvent(ev.id),
+            hasDiscussion: false,
+            onOpenDetail: null,
+            onToggle: () => _handleToggleOfflineEvent(ev),
           );
         },
       ),
@@ -1745,108 +1843,209 @@ class _GroupScreenState extends State<GroupScreen> {
     required String distanceTag,
     required String paceGroup,
     required String description,
+    required int minLevel,
+    required int maxParticipants,
     required int attendeesCount,
     required List<String> attendeeNames,
     required bool isAttending,
+    required bool hasDiscussion,
+    required VoidCallback? onOpenDetail,
     required VoidCallback onToggle,
   }) {
+    final bool isUnlocked = RunnerStats.meetsLevelRequirement(userLevel: _userLevel, minLevel: minLevel);
+    final int xpMissing = RunnerStats.xpNeededForLevel(minLevel, _userTotalXp);
+    final bool isFull = attendeesCount >= maxParticipants;
+    final bool blockedByQuota = !isAttending && isFull;
+    final double quotaRatio = (attendeesCount / maxParticipants).clamp(0.0, 1.0);
     final attendeesPreview = attendeeNames.isEmpty
         ? null
         : attendeeNames.take(3).join(', ') +
             (attendeeNames.length > 3 ? ' +${attendeeNames.length - 3} lainnya' : '');
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.cardDark,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: isAttending ? AppColors.accentGreen.withValues(alpha: 0.5) : Colors.white10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                decoration: BoxDecoration(
-                  color: AppColors.primaryOrange.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(6),
+    return GestureDetector(
+      onTap: onOpenDetail,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isUnlocked ? AppColors.cardDark : AppColors.cardDark.withValues(alpha: 0.68),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: !isUnlocked
+                ? Colors.white12
+                : isAttending
+                    ? AppColors.accentGreen.withValues(alpha: 0.5)
+                    : Colors.white10,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryOrange.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(distanceTag, style: const TextStyle(color: AppColors.primaryOrange, fontSize: 11, fontWeight: FontWeight.w800)),
                 ),
-                child: Text(distanceTag, style: const TextStyle(color: AppColors.primaryOrange, fontSize: 11, fontWeight: FontWeight.w800)),
-              ),
-              Text(paceGroup, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white)),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              const Icon(Icons.calendar_today, size: 13, color: AppColors.primaryOrange),
-              const SizedBox(width: 6),
-              Text(dateStr, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              const Icon(Icons.location_on, size: 13, color: AppColors.accentBlue),
-              const SizedBox(width: 6),
-              Expanded(child: Text(location, style: const TextStyle(color: Colors.white70, fontSize: 12))),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(description, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
-          if (attendeesPreview != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Ikut hadir: $attendeesPreview',
-              style: const TextStyle(color: AppColors.accentGreen, fontSize: 11.5, fontWeight: FontWeight.w500),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-          const SizedBox(height: 14),
-          const Divider(color: Colors.white10, height: 1),
-          const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.people, size: 16, color: AppColors.primaryOrange),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: (isUnlocked ? AppColors.accentGreen : Colors.white24).withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        isUnlocked ? Icons.lock_open_rounded : Icons.lock_outline_rounded,
+                        size: 11,
+                        color: isUnlocked ? AppColors.accentGreen : Colors.white54,
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        minLevel == 1 ? 'LV. 1+' : 'MIN LV. $minLevel',
+                        style: TextStyle(
+                          color: isUnlocked ? AppColors.accentGreen : Colors.white60,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                if (hasDiscussion) ...[
+                  const Icon(Icons.forum_outlined, size: 15, color: AppColors.textSecondary),
                   const SizedBox(width: 6),
-                  Text('$attendeesCount Pelari Hadir', style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
                 ],
+                Text(paceGroup, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: isUnlocked ? Colors.white : Colors.white60,
               ),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isAttending ? AppColors.accentGreen.withValues(alpha: 0.2) : AppColors.primaryOrange,
-                  side: isAttending ? const BorderSide(color: AppColors.accentGreen) : BorderSide.none,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.calendar_today, size: 13, color: AppColors.primaryOrange),
+                const SizedBox(width: 6),
+                Text(dateStr, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(Icons.location_on, size: 13, color: AppColors.accentBlue),
+                const SizedBox(width: 6),
+                Expanded(child: Text(location, style: const TextStyle(color: Colors.white70, fontSize: 12))),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(description, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12.5)),
+            if (!isUnlocked) ...[
+              const SizedBox(height: 8),
+              Text(
+                '🔒 Capai Level $minLevel (kurang $xpMissing XP lagi) untuk mendaftar & ikut diskusi acara.',
+                style: const TextStyle(color: Colors.amber, fontSize: 11.5),
+              ),
+            ],
+            if (attendeesPreview != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Ikut hadir: $attendeesPreview',
+                style: const TextStyle(color: AppColors.accentGreen, fontSize: 11.5, fontWeight: FontWeight.w500),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 12),
+            // Bar Kuota Peserta
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Kuota: $attendeesCount / $maxParticipants Pelari',
+                  style: const TextStyle(color: Colors.white70, fontSize: 11.5, fontWeight: FontWeight.w600),
                 ),
-                onPressed: onToggle,
-                icon: Icon(
-                  isAttending ? Icons.check_circle : Icons.event_available,
-                  size: 16,
-                  color: isAttending ? AppColors.accentGreen : Colors.white,
-                ),
-                label: Text(
-                  isAttending ? 'Terdaftar' : 'Ikut Acara',
+                Text(
+                  isFull ? 'KUOTA PENUH' : 'Sisa ${maxParticipants - attendeesCount} slot',
                   style: TextStyle(
-                    color: isAttending ? AppColors.accentGreen : Colors.white,
-                    fontSize: 12,
+                    color: isFull ? Colors.redAccent : AppColors.accentBlue,
+                    fontSize: 11,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: LinearProgressIndicator(
+                value: quotaRatio,
+                minHeight: 5.5,
+                backgroundColor: Colors.white10,
+                valueColor: AlwaysStoppedAnimation<Color>(isFull ? Colors.redAccent : AppColors.accentBlue),
               ),
-            ],
-          ),
-        ],
+            ),
+            const SizedBox(height: 12),
+            const Divider(color: Colors.white10, height: 1),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  hasDiscussion ? 'Ketuk kartu untuk diskusi & daftar peserta' : 'Mode Offline',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isAttending
+                        ? AppColors.accentGreen.withValues(alpha: 0.2)
+                        : (!isUnlocked || blockedByQuota ? Colors.white12 : AppColors.primaryOrange),
+                    side: isAttending ? const BorderSide(color: AppColors.accentGreen) : BorderSide.none,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  ),
+                  onPressed: onToggle,
+                  icon: Icon(
+                    isAttending
+                        ? Icons.check_circle
+                        : (!isUnlocked ? Icons.lock_outline : Icons.event_available),
+                    size: 16,
+                    color: isAttending
+                        ? AppColors.accentGreen
+                        : (isUnlocked && !blockedByQuota ? Colors.white : Colors.white54),
+                  ),
+                  label: Text(
+                    isAttending
+                        ? 'Terdaftar'
+                        : (!isUnlocked
+                            ? 'Butuh Lv. $minLevel'
+                            : (blockedByQuota ? 'Penuh' : 'Ikut Acara')),
+                    style: TextStyle(
+                      color: isAttending
+                          ? AppColors.accentGreen
+                          : (isUnlocked && !blockedByQuota ? Colors.white : Colors.white54),
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

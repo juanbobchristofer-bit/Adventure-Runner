@@ -81,6 +81,8 @@ class CommunityEvent {
   final String distanceTag;
   final String paceGroup;
   final String description;
+  final int minLevel;
+  final int maxParticipants;
   final int baseAttendees;
 
   const CommunityEvent({
@@ -91,6 +93,8 @@ class CommunityEvent {
     required this.distanceTag,
     required this.paceGroup,
     required this.description,
+    this.minLevel = 1,
+    this.maxParticipants = 50,
     required this.baseAttendees,
   });
 }
@@ -229,6 +233,8 @@ class CommunitySeedData {
       distanceTag: '5.0 KM',
       paceGroup: 'All Pace (6:00 - 7:30 /km)',
       description: 'Lari malam santai bersama komunitas lokal mengelilingi rute utama Jatinangor. Gratis hidrasi di titik finish.',
+      minLevel: 1,
+      maxParticipants: 100,
       baseAttendees: 84,
     ),
     CommunityEvent(
@@ -239,6 +245,8 @@ class CommunitySeedData {
       distanceTag: '10.0 KM',
       paceGroup: 'Tempo & Endurance',
       description: 'Latihan long run akhir pekan bersama pacer berpengalaman untuk persiapan lomba 10K.',
+      minLevel: 2,
+      maxParticipants: 150,
       baseAttendees: 142,
     ),
     CommunityEvent(
@@ -249,6 +257,8 @@ class CommunitySeedData {
       distanceTag: '6.5 KM',
       paceGroup: 'Trail / Elevasi +240m',
       description: 'Eksplorasi jalur tanah dan kebun pinus kaki Gunung Manglayang dengan pemandangan matahari terbit.',
+      minLevel: 3,
+      maxParticipants: 70,
       baseAttendees: 59,
     ),
   ];

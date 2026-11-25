@@ -104,7 +104,7 @@ create table if not exists public.club_messages (
 create index if not exists idx_club_messages_club_created
   on public.club_messages(club_id, created_at asc);
 
--- 4. COMMUNITY EVENTS & RSVPS (Acara lari komunitas online)
+-- 4. COMMUNITY EVENTS, RSVPS & DISCUSSION (Acara berlevel + kuota + diskusi live)
 create table if not exists public.community_events (
   id uuid primary key default gen_random_uuid(),
   title text not null,
@@ -113,6 +113,8 @@ create table if not exists public.community_events (
   distance_tag text not null default '5.0 KM',
   pace_group text not null default 'All Pace',
   description text not null default '',
+  min_level integer not null default 1,
+  max_participants integer not null default 50,
   created_by uuid references public.profiles(id) on delete set null,
   created_at timestamptz not null default now()
 );
@@ -123,6 +125,17 @@ create table if not exists public.event_rsvps (
   rsvped_at timestamptz not null default now(),
   primary key (event_id, user_id)
 );
+
+create table if not exists public.event_messages (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.community_events(id) on delete cascade,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  content text not null check (char_length(trim(content)) > 0 and char_length(content) <= 500),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_event_messages_event_created
+  on public.event_messages(event_id, created_at asc);
 
 -- ============================================================================
 -- TABLE PRIVILEGES (WAJIB DI SUPABASE TERBARU AGAR ROLE ANON & AUTHENTICATED BISA AKSES)
@@ -137,7 +150,8 @@ grant select on
   public.club_members,
   public.club_messages,
   public.community_events,
-  public.event_rsvps
+  public.event_rsvps,
+  public.event_messages
 to anon, authenticated;
 
 grant insert, update on public.profiles to authenticated;
@@ -147,6 +161,7 @@ grant insert, update, delete on public.club_members to authenticated;
 grant insert, delete on public.club_messages to authenticated;
 grant insert, update, delete on public.community_events to authenticated;
 grant insert, update, delete on public.event_rsvps to authenticated;
+grant insert, delete on public.event_messages to authenticated;
 
 -- ============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
@@ -159,6 +174,7 @@ alter table public.club_members enable row level security;
 alter table public.club_messages enable row level security;
 alter table public.community_events enable row level security;
 alter table public.event_rsvps enable row level security;
+alter table public.event_messages enable row level security;
 
 -- PROFILES
 drop policy if exists "Profiles are viewable by everyone" on public.profiles;
@@ -273,6 +289,34 @@ drop policy if exists "Users can cancel own RSVP" on public.event_rsvps;
 create policy "Users can cancel own RSVP"
   on public.event_rsvps for delete using (auth.uid() = user_id);
 
+-- EVENT MESSAGES (Hanya peserta terdaftar atau pembuat acara yang boleh mengirim pesan)
+drop policy if exists "Event messages are viewable by everyone" on public.event_messages;
+create policy "Event messages are viewable by everyone"
+  on public.event_messages for select using (true);
+
+drop policy if exists "Event attendees can send messages" on public.event_messages;
+create policy "Event attendees can send messages"
+  on public.event_messages for insert
+  with check (
+    auth.uid() = user_id
+    and (
+      exists (
+        select 1 from public.event_rsvps er
+        where er.event_id = event_messages.event_id
+          and er.user_id = auth.uid()
+      )
+      or exists (
+        select 1 from public.community_events ev
+        where ev.id = event_messages.event_id
+          and ev.created_by = auth.uid()
+      )
+    )
+  );
+
+drop policy if exists "Users can delete own event messages" on public.event_messages;
+create policy "Users can delete own event messages"
+  on public.event_messages for delete using (auth.uid() = user_id);
+
 -- ============================================================================
 -- DATA AWAL KOMUNITAS (IDEMPOTENT / AMAN DIJALANKAN ULANG)
 -- ============================================================================
@@ -294,9 +338,11 @@ values
   ('11111111-1111-1111-1111-111111111103', 'Adventure Runners Indonesia', 'Nasional • Online Club', 'Klub terbuka seluruh pelari Adventure Runner dari berbagai kota di Indonesia.', 'Bebas • Sync Mingguan', '#29B6F6', 1)
 on conflict (id) do update set min_level = excluded.min_level;
 
-insert into public.community_events (id, title, date_str, location, distance_tag, pace_group, description)
+insert into public.community_events (id, title, date_str, location, distance_tag, pace_group, description, min_level, max_participants)
 values
-  ('22222222-2222-2222-2222-222222222201', 'Jatinangor Loop Night Run 5K', 'Sabtu • 19:30 WIB', 'Gerbang Utama Unpad, Jatinangor', '5.0 KM', 'All Pace (6:00 - 7:30 /km)', 'Lari malam santai bersama komunitas lokal mengelilingi rute utama Jatinangor.'),
-  ('22222222-2222-2222-2222-222222222202', 'Sunday Morning Long Run 10K', 'Minggu • 06:00 WIB', 'Stadion Siliwangi, Bandung', '10.0 KM', 'Tempo & Endurance', 'Latihan long run akhir pekan bersama pacer komunitas untuk persiapan 10K.'),
-  ('22222222-2222-2222-2222-222222222203', 'Manglayang Sunrise Fun Trail', 'Minggu • 06:15 WIB', 'Pos Pendakian Barubereum, Cileunyi', '6.5 KM', 'Trail / Elevasi +240m', 'Eksplorasi jalur tanah dan kebun pinus kaki Gunung Manglayang saat matahari terbit.')
-on conflict (id) do nothing;
+  ('22222222-2222-2222-2222-222222222201', 'Jatinangor Loop Night Run 5K', 'Sabtu • 19:30 WIB', 'Gerbang Utama Unpad, Jatinangor', '5.0 KM', 'All Pace (6:00 - 7:30 /km)', 'Lari malam santai bersama komunitas lokal mengelilingi rute utama Jatinangor.', 1, 50),
+  ('22222222-2222-2222-2222-222222222202', 'Sunday Morning Long Run 10K', 'Minggu • 06:00 WIB', 'Stadion Siliwangi, Bandung', '10.0 KM', 'Tempo & Endurance', 'Latihan long run akhir pekan bersama pacer komunitas untuk persiapan 10K.', 2, 40),
+  ('22222222-2222-2222-2222-222222222203', 'Manglayang Sunrise Fun Trail', 'Minggu • 06:15 WIB', 'Pos Pendakian Barubereum, Cileunyi', '6.5 KM', 'Trail / Elevasi +240m', 'Eksplorasi jalur tanah dan kebun pinus kaki Gunung Manglayang saat matahari terbit.', 3, 25)
+on conflict (id) do update set
+  min_level = excluded.min_level,
+  max_participants = excluded.max_participants;
