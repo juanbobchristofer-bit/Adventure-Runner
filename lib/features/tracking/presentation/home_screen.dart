@@ -894,10 +894,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 CircleAvatar(
                   radius: 18,
                   backgroundColor: AppColors.cardElevated,
-                  child: Text(
-                    post.authorName.trim().isNotEmpty ? post.authorName.trim()[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
+                  backgroundImage: post.authorAvatarUrl != null ? NetworkImage(post.authorAvatarUrl!) : null,
+                  child: post.authorAvatarUrl == null
+                      ? Text(
+                          post.authorName.trim().isNotEmpty ? post.authorName.trim()[0].toUpperCase() : '?',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        )
+                      : null,
                 ),
                 const SizedBox(width: 10),
                 Expanded(

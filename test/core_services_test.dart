@@ -119,6 +119,16 @@ void main() {
         await storage.deleteRun('run_100');
         expect(notifications, 3);
         expect(await storage.getSavedRuns(), isEmpty);
+
+        // Import runs from cloud (no duplicates, sorted newest-first)
+        final importedCount = await storage.importRunsFromCloud([
+          run.copyWith(title: 'Cloud Run A'),
+          run.copyWith(title: 'Duplicate Ignored'),
+        ]);
+        expect(importedCount, 1);
+        final afterImport = await storage.getSavedRuns();
+        expect(afterImport.length, 1);
+        expect(afterImport.first.title, 'Cloud Run A');
       } finally {
         RunStorageService.runUpdateNotifier.removeListener(listener);
       }

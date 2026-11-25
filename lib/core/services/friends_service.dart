@@ -16,6 +16,7 @@ class RunnerProfileSummary {
   final String displayName;
   final String city;
   final String bio;
+  final String? avatarUrl;
   final int runnerLevel;
   final double totalDistanceKm;
   final double weeklyDistanceKm;
@@ -27,6 +28,7 @@ class RunnerProfileSummary {
     required this.displayName,
     required this.city,
     required this.bio,
+    this.avatarUrl,
     required this.runnerLevel,
     required this.totalDistanceKm,
     required this.weeklyDistanceKm,
@@ -87,6 +89,7 @@ class FriendsService {
     final uid = p['id']?.toString() ?? '';
     final isCurrentWeek = p['week_start_iso']?.toString() == currentWeekIso;
     final level = (p['runner_level'] as num?)?.toInt() ?? 1;
+    final rawAvatar = p['avatar_url']?.toString().trim();
 
     return RunnerProfileSummary(
       userId: uid,
@@ -95,6 +98,7 @@ class FriendsService {
           : 'Pelari Adventure',
       city: p['city']?.toString() ?? 'Indonesia',
       bio: p['bio']?.toString() ?? '',
+      avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
       runnerLevel: level < 1 ? 1 : level,
       totalDistanceKm: (p['total_distance_km'] as num?)?.toDouble() ?? 0.0,
       weeklyDistanceKm: isCurrentWeek ? ((p['weekly_distance_km'] as num?)?.toDouble() ?? 0.0) : 0.0,
@@ -141,13 +145,20 @@ class FriendsService {
       try {
         rawProfiles = await supabase
             .from('profiles')
-            .select('id, display_name, city, bio, runner_level, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso')
+            .select('id, display_name, city, bio, avatar_url, runner_level, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso')
             .inFilter('id', otherUserIds.toList());
       } on PostgrestException {
-        rawProfiles = await supabase
-            .from('profiles')
-            .select('id, display_name, city, bio, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso')
-            .inFilter('id', otherUserIds.toList());
+        try {
+          rawProfiles = await supabase
+              .from('profiles')
+              .select('id, display_name, city, bio, runner_level, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso')
+              .inFilter('id', otherUserIds.toList());
+        } on PostgrestException {
+          rawProfiles = await supabase
+              .from('profiles')
+              .select('id, display_name, city, bio, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso')
+              .inFilter('id', otherUserIds.toList());
+        }
       }
 
       final profileMap = <String, RunnerProfileSummary>{};
@@ -247,19 +258,29 @@ class FriendsService {
     try {
       var req = supabase
           .from('profiles')
-          .select('id, display_name, city, bio, runner_level, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso');
+          .select('id, display_name, city, bio, avatar_url, runner_level, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso');
       if (cleanQuery.isNotEmpty) {
         req = req.ilike('display_name', '%$cleanQuery%');
       }
       raw = await req.order('updated_at', ascending: false).limit(25);
     } on PostgrestException {
-      var req = supabase
-          .from('profiles')
-          .select('id, display_name, city, bio, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso');
-      if (cleanQuery.isNotEmpty) {
-        req = req.ilike('display_name', '%$cleanQuery%');
+      try {
+        var req = supabase
+            .from('profiles')
+            .select('id, display_name, city, bio, runner_level, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso');
+        if (cleanQuery.isNotEmpty) {
+          req = req.ilike('display_name', '%$cleanQuery%');
+        }
+        raw = await req.order('updated_at', ascending: false).limit(25);
+      } on PostgrestException {
+        var req = supabase
+            .from('profiles')
+            .select('id, display_name, city, bio, total_distance_km, weekly_distance_km, weekly_runs_count, week_start_iso');
+        if (cleanQuery.isNotEmpty) {
+          req = req.ilike('display_name', '%$cleanQuery%');
+        }
+        raw = await req.order('updated_at', ascending: false).limit(25);
       }
-      raw = await req.order('updated_at', ascending: false).limit(25);
     }
 
     final list = <RunnerProfileSummary>[];

@@ -431,10 +431,13 @@ class _FriendsTabViewState extends State<FriendsTabView> {
             CircleAvatar(
               radius: 19,
               backgroundColor: AppColors.cardElevated,
-              child: Text(
-                item.profile.displayName[0].toUpperCase(),
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
+              backgroundImage: item.profile.avatarUrl != null ? NetworkImage(item.profile.avatarUrl!) : null,
+              child: item.profile.avatarUrl == null
+                  ? Text(
+                      item.profile.displayName[0].toUpperCase(),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    )
+                  : null,
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -485,7 +488,10 @@ class _FriendsTabViewState extends State<FriendsTabView> {
     required RunnerProfileSummary runner,
     FriendItem? friendItem,
   }) {
-    final hasAvatar = runner.isCurrentUser && widget.currentUserAvatarPath != null;
+    final hasLocalAvatar = runner.isCurrentUser && widget.currentUserAvatarPath != null;
+    final ImageProvider<Object>? avatarImg = hasLocalAvatar
+        ? FileImage(File(widget.currentUserAvatarPath!)) as ImageProvider<Object>
+        : (runner.avatarUrl != null ? NetworkImage(runner.avatarUrl!) : null);
     return GestureDetector(
       onTap: () => _openRunnerProfile(runner),
       child: Container(
@@ -518,8 +524,8 @@ class _FriendsTabViewState extends State<FriendsTabView> {
             CircleAvatar(
               radius: 17,
               backgroundColor: AppColors.cardElevated,
-              backgroundImage: hasAvatar ? FileImage(File(widget.currentUserAvatarPath!)) : null,
-              child: !hasAvatar
+              backgroundImage: avatarImg,
+              child: avatarImg == null
                   ? Text(
                       runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
@@ -602,10 +608,13 @@ class _FriendsTabViewState extends State<FriendsTabView> {
             CircleAvatar(
               radius: 19,
               backgroundColor: AppColors.cardElevated,
-              child: Text(
-                runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-              ),
+              backgroundImage: runner.avatarUrl != null ? NetworkImage(runner.avatarUrl!) : null,
+              child: runner.avatarUrl == null
+                  ? Text(
+                      runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    )
+                  : null,
             ),
             const SizedBox(width: 10),
             Expanded(

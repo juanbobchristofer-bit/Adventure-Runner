@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
+import '../../../core/services/cloud_sync_service.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/services/offline_tile_provider.dart';
 import '../../../core/services/profile_storage_service.dart';
@@ -47,6 +48,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _hasBackgroundGps = false;
   UserProfileData _profile = UserProfileData.defaultProfile;
   bool _isLoading = true;
+  bool _isSyncingCloudRuns = false;
 
   @override
   void initState() {
@@ -198,6 +200,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onTap: () async {
                     Navigator.pop(ctx);
                     await _profileService.removeAvatar();
+                    await CloudSyncService.removeCloudAvatar();
                     _loadUserData();
                   },
                 ),
@@ -217,12 +220,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
         imageQuality: 85,
       );
       if (picked != null) {
-        await _profileService.saveAvatarImage(File(picked.path));
+        final savedPath = await _profileService.saveAvatarImage(File(picked.path));
+        String? cloudUrl;
+        if (AuthService.isLoggedIn) {
+          cloudUrl = await CloudSyncService.uploadAvatar(File(savedPath));
+        }
         await _loadUserData();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Foto profil berhasil diperbarui!'),
+            SnackBar(
+              content: Text(
+                cloudUrl != null
+                    ? 'Foto profil diperbarui & disinkronkan ke Cloud!'
+                    : 'Foto profil berhasil diperbarui!',
+              ),
               backgroundColor: AppColors.cardElevated,
             ),
           );
@@ -571,86 +582,159 @@ class _ProfileScreenState extends State<ProfileScreen> {
           color: isLoggedIn ? AppColors.accentGreen.withValues(alpha: 0.4) : Colors.white10,
         ),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(9),
-            decoration: BoxDecoration(
-              color: (isLoggedIn ? AppColors.accentGreen : AppColors.primaryOrange).withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(
-              isLoggedIn ? Icons.cloud_done_outlined : Icons.login_rounded,
-              color: isLoggedIn ? AppColors.accentGreen : AppColors.primaryOrange,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  isLoggedIn ? 'Akun Komunitas Aktif' : 'Mode Tamu (Offline)',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: (isLoggedIn ? AppColors.accentGreen : AppColors.primaryOrange).withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  isLoggedIn ? email : 'Masuk untuk ikut Klub, Acara & Leaderboard online',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                child: Icon(
+                  isLoggedIn ? Icons.cloud_done_outlined : Icons.login_rounded,
+                  color: isLoggedIn ? AppColors.accentGreen : AppColors.primaryOrange,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isLoggedIn ? 'Akun Komunitas Aktif' : 'Mode Tamu (Offline)',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      isLoggedIn ? email : 'Masuk untuk ikut Klub, Acara & Leaderboard online',
+                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              if (isLoggedIn) ...[
+                IconButton(
+                  tooltip: 'Sinkron Statistik',
+                  icon: const Icon(Icons.sync, color: AppColors.accentGreen, size: 20),
+                  onPressed: () async {
+                    final ok = await AuthService.syncLocalStatsToCloud();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(ok ? 'Statistik berhasil disinkronkan ke cloud!' : 'Gagal sinkron. Periksa internet atau tabel Supabase.'),
+                          backgroundColor: AppColors.cardElevated,
+                        ),
+                      );
+                    }
+                  },
+                ),
+                TextButton(
+                  onPressed: () async {
+                    await AuthService.signOut();
+                    if (mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Anda keluar ke Mode Tamu (Offline). Data lokal tetap aman.'),
+                          backgroundColor: AppColors.cardElevated,
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Keluar', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                ),
+              ] else
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryOrange,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    minimumSize: Size.zero,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onPressed: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const LoginScreen()),
+                    );
+                    await _loadUserData();
+                  },
+                  child: const Text('Masuk', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                ),
+            ],
+          ),
+          if (isLoggedIn) ...[
+            const Divider(color: Colors.white10, height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.accentBlue),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: _isSyncingCloudRuns
+                        ? null
+                        : () async {
+                            setState(() => _isSyncingCloudRuns = true);
+                            final count = await CloudSyncService.backupAllLocalRuns();
+                            if (mounted) {
+                              setState(() => _isSyncingCloudRuns = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    count > 0
+                                        ? '$count riwayat lari berhasil dicadangkan ke Cloud!'
+                                        : 'Tidak ada data yang dicadangkan (pastikan migrasi P6 sudah dijalankan).',
+                                  ),
+                                  backgroundColor: AppColors.cardElevated,
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.cloud_upload_outlined, size: 16, color: AppColors.accentBlue),
+                    label: const Text('Backup Riwayat', style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.accentGreen),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    onPressed: _isSyncingCloudRuns
+                        ? null
+                        : () async {
+                            setState(() => _isSyncingCloudRuns = true);
+                            final restored = await CloudSyncService.restoreRunsFromCloud();
+                            await _loadUserData();
+                            if (mounted) {
+                              setState(() => _isSyncingCloudRuns = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    restored > 0
+                                        ? '$restored riwayat lari berhasil dipulihkan dari Cloud!'
+                                        : 'Semua riwayat cloud sudah sinkron di perangkat ini.',
+                                  ),
+                                  backgroundColor: AppColors.cardElevated,
+                                ),
+                              );
+                            }
+                          },
+                    icon: const Icon(Icons.cloud_download_outlined, size: 16, color: AppColors.accentGreen),
+                    label: const Text('Pulihkan Cloud', style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold)),
+                  ),
                 ),
               ],
             ),
-          ),
-          if (isLoggedIn) ...[
-            IconButton(
-              tooltip: 'Sinkron ke Cloud',
-              icon: const Icon(Icons.sync, color: AppColors.accentGreen, size: 20),
-              onPressed: () async {
-                final ok = await AuthService.syncLocalStatsToCloud();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(ok ? 'Statistik berhasil disinkronkan ke cloud!' : 'Gagal sinkron. Periksa internet atau tabel Supabase.'),
-                      backgroundColor: AppColors.cardElevated,
-                    ),
-                  );
-                }
-              },
-            ),
-            TextButton(
-              onPressed: () async {
-                await AuthService.signOut();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Anda keluar ke Mode Tamu (Offline). Data lokal tetap aman.'),
-                      backgroundColor: AppColors.cardElevated,
-                    ),
-                  );
-                }
-              },
-              child: const Text('Keluar', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-          ] else
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryOrange,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                minimumSize: Size.zero,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
-                );
-                await _loadUserData();
-              },
-              child: const Text('Masuk', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
+          ],
         ],
       ),
     );
@@ -758,7 +842,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildProfileHeroCard() {
-    final hasAvatar = _profile.avatarPath != null;
+    final hasLocalAvatar = _profile.avatarPath != null;
+    final hasCloudAvatar = !hasLocalAvatar && _profile.avatarUrl != null;
+    final ImageProvider<Object>? avatarImage = hasLocalAvatar
+        ? FileImage(File(_profile.avatarPath!)) as ImageProvider<Object>
+        : (hasCloudAvatar ? NetworkImage(_profile.avatarUrl!) : null);
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -790,8 +878,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: CircleAvatar(
                         radius: 36,
                         backgroundColor: AppColors.cardElevated,
-                        backgroundImage: hasAvatar ? FileImage(File(_profile.avatarPath!)) : null,
-                        child: !hasAvatar
+                        backgroundImage: avatarImage,
+                        child: avatarImage == null
                             ? const Icon(Icons.person, size: 38, color: Colors.white70)
                             : null,
                       ),

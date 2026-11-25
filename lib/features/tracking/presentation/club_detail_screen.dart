@@ -52,6 +52,44 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
   bool get _meetsLevel =>
       RunnerStats.meetsLevelRequirement(userLevel: widget.userLevel, minLevel: _club.minLevel);
 
+  bool get _isOwner =>
+      AuthService.userId != null && _club.createdBy != null && _club.createdBy == AuthService.userId;
+
+  Future<void> _confirmDeleteClub() async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppColors.cardDark,
+            title: const Text('Hapus Klub?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: Text(
+              'Klub "${_club.name}" beserta seluruh anggota dan riwayat obrolannya akan dihapus permanen.',
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal', style: TextStyle(color: Colors.grey))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Hapus Klub', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    try {
+      await _communityService.deleteClub(_club.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Klub "${_club.name}" berhasil dihapus.'), backgroundColor: AppColors.cardElevated),
+        );
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      _showSnack('Gagal menghapus klub: $e', isError: true);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -279,6 +317,12 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16.5),
             ),
             actions: [
+              if (_isOwner)
+                IconButton(
+                  tooltip: 'Hapus Klub Milik Anda',
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  onPressed: _confirmDeleteClub,
+                ),
               IconButton(
                 tooltip: 'Segarkan Data Klub',
                 icon: const Icon(Icons.sync, color: Colors.white70),
@@ -434,7 +478,10 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
         itemBuilder: (context, idx) {
           final m = _members[idx];
           final rank = idx + 1;
-          final hasAvatar = m.isCurrentUser && widget.userAvatarPath != null;
+          final hasLocalAvatar = m.isCurrentUser && widget.userAvatarPath != null;
+          final ImageProvider<Object>? avatarImg = hasLocalAvatar
+              ? FileImage(File(widget.userAvatarPath!)) as ImageProvider<Object>
+              : (m.avatarUrl != null ? NetworkImage(m.avatarUrl!) : null);
 
           return GestureDetector(
             onTap: () async {
@@ -477,8 +524,8 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
                   CircleAvatar(
                     radius: 18,
                     backgroundColor: AppColors.cardElevated,
-                    backgroundImage: hasAvatar ? FileImage(File(widget.userAvatarPath!)) : null,
-                    child: !hasAvatar
+                    backgroundImage: avatarImg,
+                    child: avatarImg == null
                         ? Text(
                             m.name.trim().isNotEmpty ? m.name.trim()[0].toUpperCase() : '?',
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),

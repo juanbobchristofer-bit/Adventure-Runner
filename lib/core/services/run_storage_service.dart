@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../features/tracking/domain/run_model.dart';
 import '../utils/gpx_exporter.dart';
+import 'cloud_sync_service.dart';
 import 'social_feed_service.dart';
 
 /// Repositori lokal untuk riwayat lari.
@@ -197,6 +198,7 @@ class RunStorageService {
     }
     runUpdateNotifier.value++;
     unawaited(SocialFeedService.publishRunToFeed(run));
+    unawaited(CloudSyncService.backupSingleRun(run));
   }
 
   Future<void> updateRun(RunModel updatedRun) async {
@@ -214,6 +216,7 @@ class RunStorageService {
       }
       runUpdateNotifier.value++;
       unawaited(SocialFeedService.publishRunToFeed(updatedRun));
+      unawaited(CloudSyncService.backupSingleRun(updatedRun));
     }
   }
 
@@ -241,6 +244,38 @@ class RunStorageService {
     }
     runUpdateNotifier.value++;
     unawaited(SocialFeedService.deletePublishedRun(id));
+    unawaited(CloudSyncService.deleteCloudRun(id));
+  }
+
+  /// Mengimpor riwayat lari hasil pulihan dari cloud tanpa duplikasi & tanpa memicu upload ulang
+  Future<int> importRunsFromCloud(List<RunModel> cloudRuns) async {
+    if (cloudRuns.isEmpty) return 0;
+    final dbDir = await _resolveDbDir();
+    final List<RunModel> currentRuns = await getSavedRuns();
+    final existingIds = currentRuns.map((r) => r.id).toSet();
+
+    int importedCount = 0;
+    for (final run in cloudRuns) {
+      if (!existingIds.contains(run.id)) {
+        currentRuns.add(run);
+        existingIds.add(run.id);
+        importedCount++;
+        if (dbDir != null) {
+          await _writeTrackFile(dbDir, run);
+        }
+      }
+    }
+
+    if (importedCount > 0) {
+      currentRuns.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (dbDir == null) {
+        await _saveToSharedPrefsFallback(currentRuns);
+      } else {
+        await _writeIndexFile(dbDir, currentRuns);
+      }
+      runUpdateNotifier.value++;
+    }
+    return importedCount;
   }
 
   /// Menyalin foto aktivitas lari ke penyimpanan permanen aplikasi

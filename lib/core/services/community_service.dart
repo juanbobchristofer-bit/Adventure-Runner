@@ -42,6 +42,7 @@ class OnlineClubMember {
   final String userId;
   final String name;
   final String city;
+  final String? avatarUrl;
   final double weeklyKm;
   final int runsCount;
   final int runnerLevel;
@@ -51,6 +52,7 @@ class OnlineClubMember {
     required this.userId,
     required this.name,
     required this.city,
+    this.avatarUrl,
     required this.weeklyKm,
     required this.runsCount,
     this.runnerLevel = 1,
@@ -128,6 +130,7 @@ class EventAttendee {
   final String userId;
   final String name;
   final String city;
+  final String? avatarUrl;
   final int runnerLevel;
   final bool isCurrentUser;
 
@@ -135,6 +138,7 @@ class EventAttendee {
     required this.userId,
     required this.name,
     required this.city,
+    this.avatarUrl,
     this.runnerLevel = 1,
     required this.isCurrentUser,
   });
@@ -449,14 +453,20 @@ class CommunityService {
     try {
       raw = await supabase
           .from('club_members')
-          .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso, runner_level)')
+          .select('user_id, profiles(display_name, city, avatar_url, weekly_distance_km, weekly_runs_count, week_start_iso, runner_level)')
           .eq('club_id', clubId);
     } on PostgrestException {
-      // Fallback aman bila kolom runner_level belum dimigrasi
-      raw = await supabase
-          .from('club_members')
-          .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso)')
-          .eq('club_id', clubId);
+      try {
+        raw = await supabase
+            .from('club_members')
+            .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso, runner_level)')
+            .eq('club_id', clubId);
+      } on PostgrestException {
+        raw = await supabase
+            .from('club_members')
+            .select('user_id, profiles(display_name, city, weekly_distance_km, weekly_runs_count, week_start_iso)')
+            .eq('club_id', clubId);
+      }
     }
 
     final members = <OnlineClubMember>[];
@@ -465,6 +475,7 @@ class CommunityService {
       final p = item['profiles'] is Map ? Map<String, dynamic>.from(item['profiles'] as Map) : <String, dynamic>{};
       final isCurrentWeek = p['week_start_iso']?.toString() == currentWeekIso;
       final level = (p['runner_level'] as num?)?.toInt() ?? 1;
+      final rawAvatar = p['avatar_url']?.toString().trim();
 
       members.add(
         OnlineClubMember(
@@ -473,6 +484,7 @@ class CommunityService {
               ? p['display_name'].toString()
               : 'Pelari Adventure',
           city: p['city']?.toString() ?? 'Indonesia',
+          avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
           weeklyKm: isCurrentWeek ? ((p['weekly_distance_km'] as num?)?.toDouble() ?? 0.0) : 0.0,
           runsCount: isCurrentWeek ? ((p['weekly_runs_count'] as num?)?.toInt() ?? 0) : 0,
           runnerLevel: level < 1 ? 1 : level,
@@ -815,15 +827,23 @@ class CommunityService {
     try {
       raw = await supabase
           .from('event_rsvps')
-          .select('user_id, profiles(display_name, city, runner_level)')
+          .select('user_id, profiles(display_name, city, avatar_url, runner_level)')
           .eq('event_id', eventId)
           .order('rsvped_at', ascending: true);
     } on PostgrestException {
-      raw = await supabase
-          .from('event_rsvps')
-          .select('user_id, profiles(display_name, city)')
-          .eq('event_id', eventId)
-          .order('rsvped_at', ascending: true);
+      try {
+        raw = await supabase
+            .from('event_rsvps')
+            .select('user_id, profiles(display_name, city, runner_level)')
+            .eq('event_id', eventId)
+            .order('rsvped_at', ascending: true);
+      } on PostgrestException {
+        raw = await supabase
+            .from('event_rsvps')
+            .select('user_id, profiles(display_name, city)')
+            .eq('event_id', eventId)
+            .order('rsvped_at', ascending: true);
+      }
     }
 
     final list = <EventAttendee>[];
@@ -831,6 +851,7 @@ class CommunityService {
       final uid = row['user_id'].toString();
       final p = row['profiles'] is Map ? Map<String, dynamic>.from(row['profiles'] as Map) : <String, dynamic>{};
       final level = (p['runner_level'] as num?)?.toInt() ?? 1;
+      final rawAvatar = p['avatar_url']?.toString().trim();
       list.add(
         EventAttendee(
           userId: uid,
@@ -838,12 +859,27 @@ class CommunityService {
               ? p['display_name'].toString()
               : 'Pelari Adventure',
           city: p['city']?.toString() ?? 'Indonesia',
+          avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
           runnerLevel: level < 1 ? 1 : level,
           isCurrentUser: currentUid != null && uid == currentUid,
         ),
       );
     }
     return list;
+  }
+
+  /// Menghapus klub milik sendiri (dijaga oleh kebijakan RLS `created_by = auth.uid()`)
+  Future<void> deleteClub(String clubId) async {
+    final supabase = AuthService.client!;
+    final uid = AuthService.userId!;
+    await supabase.from('clubs').delete().eq('id', clubId).eq('created_by', uid);
+  }
+
+  /// Menghapus acara milik sendiri (dijaga oleh kebijakan RLS `created_by = auth.uid()`)
+  Future<void> deleteEvent(String eventId) async {
+    final supabase = AuthService.client!;
+    final uid = AuthService.userId!;
+    await supabase.from('community_events').delete().eq('id', eventId).eq('created_by', uid);
   }
 
   /// Mengambil riwayat pesan ruang diskusi acara (60 pesan terbaru)

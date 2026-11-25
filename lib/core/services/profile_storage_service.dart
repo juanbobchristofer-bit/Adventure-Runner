@@ -10,6 +10,7 @@ class UserProfileData {
   final double weightKg;
   final double weeklyGoalKm;
   final String? avatarPath;
+  final String? avatarUrl;
   final int bonusXp;
 
   const UserProfileData({
@@ -19,6 +20,7 @@ class UserProfileData {
     required this.weightKg,
     required this.weeklyGoalKm,
     this.avatarPath,
+    this.avatarUrl,
     this.bonusXp = 0,
   });
 
@@ -39,6 +41,7 @@ class ProfileStorageService {
   static const String _keyWeight = 'user_profile_weight';
   static const String _keyGoal = 'user_weekly_goal_km';
   static const String _keyAvatarPath = 'user_profile_avatar_path';
+  static const String _keyAvatarUrl = 'user_profile_avatar_url';
   static const String _keyBonusXp = 'user_bonus_xp';
 
   /// Notifier global agar perubahan di halaman Profil langsung memperbarui HomeScreen
@@ -48,6 +51,7 @@ class ProfileStorageService {
     final prefs = await SharedPreferences.getInstance();
     final savedAvatar = prefs.getString(_keyAvatarPath);
     final validAvatar = (savedAvatar != null && File(savedAvatar).existsSync()) ? savedAvatar : null;
+    final savedAvatarUrl = prefs.getString(_keyAvatarUrl);
 
     final rawWeight = prefs.getDouble(_keyWeight);
     final rawGoal = prefs.getDouble(_keyGoal);
@@ -60,8 +64,19 @@ class ProfileStorageService {
       weightKg: (rawWeight != null && rawWeight > 0) ? rawWeight : 65.0,
       weeklyGoalKm: (rawGoal != null && rawGoal > 0) ? rawGoal : 15.0,
       avatarPath: validAvatar,
+      avatarUrl: (savedAvatarUrl != null && savedAvatarUrl.trim().isNotEmpty) ? savedAvatarUrl : null,
       bonusXp: rawBonusXp < 0 ? 0 : rawBonusXp,
     );
+  }
+
+  Future<void> saveAvatarUrl(String? url) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (url == null || url.trim().isEmpty) {
+      await prefs.remove(_keyAvatarUrl);
+    } else {
+      await prefs.setString(_keyAvatarUrl, url.trim());
+    }
+    profileUpdateNotifier.value++;
   }
 
   Future<void> saveProfile({

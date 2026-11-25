@@ -11,6 +11,7 @@ class _RunnerFullProfile {
   final String displayName;
   final String bio;
   final String city;
+  final String? avatarUrl;
   final int runnerLevel;
   final int totalXp;
   final double weeklyDistanceKm;
@@ -25,6 +26,7 @@ class _RunnerFullProfile {
     required this.displayName,
     required this.bio,
     required this.city,
+    this.avatarUrl,
     required this.runnerLevel,
     required this.totalXp,
     required this.weeklyDistanceKm,
@@ -122,12 +124,13 @@ class _RunnerProfileSheetState extends State<RunnerProfileSheet> {
         row = await supabase
             .from('profiles')
             .select(
-              'id, display_name, bio, city, runner_level, total_xp, weekly_distance_km, weekly_runs_count, total_distance_km, total_runs_count, total_calories, longest_run_km',
+              'id, display_name, bio, city, avatar_url, runner_level, total_xp, weekly_distance_km, weekly_runs_count, total_distance_km, total_runs_count, total_calories, longest_run_km',
             )
             .eq('id', widget.userId)
             .maybeSingle();
       } on PostgrestException catch (e) {
-        if (e.message.toLowerCase().contains('runner_level') || e.message.toLowerCase().contains('total_xp')) {
+        final msg = e.message.toLowerCase();
+        if (msg.contains('avatar_url') || msg.contains('runner_level') || msg.contains('total_xp')) {
           row = await supabase
               .from('profiles')
               .select(
@@ -155,6 +158,8 @@ class _RunnerProfileSheetState extends State<RunnerProfileSheet> {
             final xp = (row['total_xp'] as num?)?.toInt() ?? computedXp;
             final level = ((row['runner_level'] as num?)?.toInt() ?? ((xp ~/ RunnerStats.xpPerLevel) + 1)).clamp(1, 999);
 
+            final rawAvatar = row['avatar_url']?.toString().trim();
+
             _profile = _RunnerFullProfile(
               userId: widget.userId,
               displayName: (row['display_name']?.toString().trim().isNotEmpty ?? false)
@@ -164,6 +169,7 @@ class _RunnerProfileSheetState extends State<RunnerProfileSheet> {
               city: (row['city']?.toString().trim().isNotEmpty ?? false)
                   ? row['city'].toString()
                   : widget.fallbackCity,
+              avatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
               runnerLevel: level,
               totalXp: xp,
               weeklyDistanceKm: (row['weekly_distance_km'] as num?)?.toDouble() ?? 0.0,
@@ -310,10 +316,13 @@ class _RunnerProfileSheetState extends State<RunnerProfileSheet> {
                 child: CircleAvatar(
                   radius: 28,
                   backgroundColor: AppColors.cardElevated,
-                  child: Text(
-                    p.displayName.trim().isNotEmpty ? p.displayName.trim()[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 22),
-                  ),
+                  backgroundImage: p.avatarUrl != null ? NetworkImage(p.avatarUrl!) : null,
+                  child: p.avatarUrl == null
+                      ? Text(
+                          p.displayName.trim().isNotEmpty ? p.displayName.trim()[0].toUpperCase() : '?',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 22),
+                        )
+                      : null,
                 ),
               ),
               const SizedBox(width: 14),

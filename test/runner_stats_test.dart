@@ -154,5 +154,36 @@ void main() {
       // KM 2 harus lebih cepat (speedKmh lebih besar) daripada KM 1
       expect(splits[1].speedKmh, greaterThan(splits[0].speedKmh));
     });
+
+    test('anti-cheat flags vehicle speeds (> 22 km/h) and excludes them from XP', () {
+      final normalRun = RunModel(
+        id: 'valid_5k',
+        title: 'Normal 5K',
+        date: '26/11/2026',
+        distanceInKm: 5.0,
+        durationInSeconds: 1500, // 12 km/j (5:00/km)
+        pace: '5:00',
+        steps: 6000,
+        calories: 320,
+        routePoints: const [],
+      );
+      final vehicleTrip = RunModel(
+        id: 'motor_5k',
+        title: 'Naik Motor 5K',
+        date: '26/11/2026',
+        distanceInKm: 5.0,
+        durationInSeconds: 450, // 40 km/j -> melebihi 22 km/j!
+        pace: '1:30',
+        steps: 50,
+        calories: 320,
+        routePoints: const [],
+      );
+
+      expect(RunnerStats.isValidRunningActivity(normalRun), isTrue);
+      expect(RunnerStats.isValidRunningActivity(vehicleTrip), isFalse);
+      expect(RunnerStats.filterValidRuns([normalRun, vehicleTrip]).length, 1);
+      // Total XP hanya berasal dari normalRun (500 + 50 = 550 XP), bukan vehicleTrip
+      expect(RunnerStats.totalXp([normalRun, vehicleTrip]), 550);
+    });
   });
 }

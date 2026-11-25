@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/cloud_sync_service.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/services/run_storage_service.dart';
 import '../../../core/widgets/dark_osm_tile_layer.dart';
@@ -131,11 +132,14 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
   ];
 
   List<ExploreRoute> _mySavedAsExploreRoutes = [];
+  List<ExploreRoute> _communityExploreRoutes = [];
 
   @override
   void initState() {
     super.initState();
     _loadUserSavedRoutes();
+    _loadCommunityRoutes();
+    _autoCenterOnUserLocation();
     RunStorageService.runUpdateNotifier.addListener(_loadUserSavedRoutes);
   }
 
@@ -146,14 +150,53 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
     super.dispose();
   }
 
-  /// Mengambil riwayat lari user dari SharedPreferences agar bisa ditampilkan di peta Explore
+  /// Otomatis memusatkan peta ke posisi GPS terakhir/terkini user (tidak terkunci di Jatinangor)
+  Future<void> _autoCenterOnUserLocation() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        return;
+      }
+      final pos = await Geolocator.getLastKnownPosition() ??
+          await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.medium);
+      final userLatLng = LatLng(pos.latitude, pos.longitude);
+      if (mounted) {
+        setState(() => _currentUserLocation = userLatLng);
+        _mapController.move(userLatLng, 14.2);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _loadCommunityRoutes() async {
+    final remote = await CloudSyncService.fetchCommunityRoutes();
+    final mapped = remote.map((r) {
+      return ExploreRoute(
+        id: 'comm_${r.id}',
+        name: r.name,
+        location: '${r.location} • oleh ${r.authorName}',
+        category: 'Komunitas',
+        distanceKm: r.distanceKm,
+        elevationGainM: r.elevationGainM,
+        surface: r.surface,
+        difficulty: r.difficulty,
+        color: Colors.cyanAccent,
+        points: r.points,
+      );
+    }).toList();
+
+    if (mounted) {
+      setState(() => _communityExploreRoutes = mapped);
+    }
+  }
+
+  /// Mengambil riwayat lari user dari penyimpanan lokal agar bisa ditampilkan di peta Explore
   Future<void> _loadUserSavedRoutes() async {
     final runs = await _storageService.getSavedRuns();
     final mapped = runs.where((r) => r.routePoints.length >= 2).map((r) {
       return ExploreRoute(
         id: r.id,
         name: r.title,
-        location: 'Rekaman Saya â€¢ ${r.date}',
+        location: 'Rekaman Saya • ${r.date}',
         category: 'Rute Saya',
         distanceKm: r.distanceInKm,
         elevationGainM: r.elevationGainM.round(),
@@ -172,7 +215,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
   }
 
   List<ExploreRoute> get _filteredRoutes {
-    final allRoutes = [..._curatedRoutes, ..._mySavedAsExploreRoutes];
+    final allRoutes = [..._communityExploreRoutes, ..._mySavedAsExploreRoutes, ..._curatedRoutes];
     return allRoutes.where((route) {
       final matchesSearch = _searchQuery.isEmpty ||
           route.name.toLowerCase().contains(_searchQuery.toLowerCase()) ||
@@ -181,6 +224,8 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
       if (!matchesSearch) return false;
 
       switch (_selectedFilter) {
+        case 'Komunitas':
+          return route.category == 'Komunitas';
         case 'Rute Popular':
           return route.category == 'Popular';
         case 'Panjang > 5km':
@@ -448,7 +493,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                       });
                     },
                     decoration: InputDecoration(
-                      hintText: 'Cari rute (Unpad, Cileunyi, Manglayang...)',
+                      hintText: 'Cari nama rute atau kota...',
                       hintStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
                       border: InputBorder.none,
                       icon: const Icon(Icons.search, color: AppColors.primaryOrange),
@@ -473,10 +518,11 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                   child: Row(
                     children: [
                       _buildFilterChip('Semua'),
+                      _buildFilterChip('Komunitas'),
+                      _buildFilterChip('Rute Saya'),
                       _buildFilterChip('Rute Popular'),
                       _buildFilterChip('Panjang > 5km'),
                       _buildFilterChip('Trail / Tanjakan'),
-                      _buildFilterChip('Rute Saya'),
                     ],
                   ),
                 ),
@@ -493,17 +539,29 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
           Positioned(
             right: 16,
             bottom: 185,
-            child: FloatingActionButton.small(
-              heroTag: 'btn_my_location',
-              backgroundColor: AppColors.cardDark,
-              onPressed: _isLocating ? null : _goToMyLocation,
-              child: _isLocating
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryOrange),
-                    )
-                  : const Icon(Icons.my_location, color: AppColors.primaryOrange),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'btn_refresh_routes',
+                  backgroundColor: AppColors.cardDark,
+                  onPressed: _loadCommunityRoutes,
+                  child: const Icon(Icons.sync, color: Colors.cyanAccent, size: 19),
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
+                  heroTag: 'btn_my_location',
+                  backgroundColor: AppColors.cardDark,
+                  onPressed: _isLocating ? null : _goToMyLocation,
+                  child: _isLocating
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryOrange),
+                        )
+                      : const Icon(Icons.my_location, color: AppColors.primaryOrange),
+                ),
+              ],
             ),
           ),
 
@@ -606,7 +664,7 @@ class _MapExploreScreenState extends State<MapExploreScreen> {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    '${route.location} â€¢ +${route.elevationGainM}m',
+                                    '${route.location} • +${route.elevationGainM}m',
                                     style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,

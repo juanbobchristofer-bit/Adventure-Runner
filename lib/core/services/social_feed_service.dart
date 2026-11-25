@@ -10,6 +10,7 @@ class SocialFeedPost {
   final String userId;
   final String authorName;
   final String authorCity;
+  final String? authorAvatarUrl;
   final int authorLevel;
   final String title;
   final String notes;
@@ -30,6 +31,7 @@ class SocialFeedPost {
     required this.userId,
     required this.authorName,
     required this.authorCity,
+    this.authorAvatarUrl,
     required this.authorLevel,
     required this.title,
     required this.notes,
@@ -55,6 +57,7 @@ class SocialFeedPost {
       userId: userId,
       authorName: authorName,
       authorCity: authorCity,
+      authorAvatarUrl: authorAvatarUrl,
       authorLevel: authorLevel,
       title: title,
       notes: notes,
@@ -162,12 +165,13 @@ class SocialFeedService {
         rawPosts = await supabase
             .from('activity_posts')
             .select(
-              'id, user_id, title, notes, feeling, distance_km, duration_seconds, pace, calories, elevation_gain_m, route_preview, created_at, profiles(display_name, city, runner_level)',
+              'id, user_id, title, notes, feeling, distance_km, duration_seconds, pace, calories, elevation_gain_m, route_preview, created_at, profiles(display_name, city, avatar_url, runner_level)',
             )
             .order('created_at', ascending: false)
             .limit(40);
       } on PostgrestException catch (e) {
-        if (e.message.toLowerCase().contains('runner_level')) {
+        final msg = e.message.toLowerCase();
+        if (msg.contains('avatar_url') || msg.contains('runner_level')) {
           rawPosts = await supabase
               .from('activity_posts')
               .select(
@@ -211,6 +215,7 @@ class SocialFeedService {
             .map((p) => LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()))
             .toList();
 
+        final rawAvatar = profile['avatar_url']?.toString().trim();
         return SocialFeedPost(
           id: pid,
           userId: authorId,
@@ -218,6 +223,7 @@ class SocialFeedService {
               ? profile['display_name'].toString()
               : 'Pelari Adventure',
           authorCity: profile['city']?.toString() ?? 'Indonesia',
+          authorAvatarUrl: (rawAvatar != null && rawAvatar.isNotEmpty) ? rawAvatar : null,
           authorLevel: ((profile['runner_level'] as num?)?.toInt() ?? 1).clamp(1, 999),
           title: row['title']?.toString() ?? 'Aktivitas Lari',
           notes: row['notes']?.toString() ?? '',

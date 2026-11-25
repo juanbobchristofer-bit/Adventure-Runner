@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/tracking/domain/runner_stats.dart';
 import '../config/supabase_config.dart';
+import 'cloud_sync_service.dart';
 import 'friends_service.dart';
 import 'profile_storage_service.dart';
 import 'run_storage_service.dart';
@@ -108,6 +109,7 @@ class AuthService {
         password: password,
       );
       await _hydrateProfileFromCloudIfDefault();
+      unawaited(CloudSyncService.restoreRunsFromCloud(onlyIfLocalEmpty: true));
       await syncLocalStatsToCloud();
       authStateNotifier.value++;
       return const AuthActionResult(
@@ -232,6 +234,11 @@ class AuthService {
       final cloudBonusXp = (row['bonus_xp'] as num?)?.toInt() ?? 0;
       await profileService.mergeBonusXpFromCloud(cloudBonusXp);
 
+      final cloudAvatarUrl = row['avatar_url']?.toString().trim();
+      if (cloudAvatarUrl != null && cloudAvatarUrl.isNotEmpty) {
+        await profileService.saveAvatarUrl(cloudAvatarUrl);
+      }
+
       if (isLocalDefaultName && row['display_name'] != null) {
         await profileService.saveProfile(
           name: row['display_name'].toString(),
@@ -254,11 +261,13 @@ class AuthService {
 
     try {
       final profile = await ProfileStorageService().getProfile();
-      final runs = await RunStorageService().getSavedRuns();
+      final allRuns = await RunStorageService().getSavedRuns();
+      // Anti-Cheat: hanya aktivitas lari manusiawi (<= 22 km/j) yang dihitung ke leaderboard & XP cloud
+      final validRuns = RunnerStats.filterValidRuns(allRuns);
       final weekStartIso = RunnerStats.startOfCurrentWeek().toIso8601String();
-      final longestKm = runs.isEmpty ? 0.0 : runs.map((r) => r.distanceInKm).reduce(math.max);
-      final totalXp = RunnerStats.totalXp(runs, bonusXp: profile.bonusXp);
-      final runnerLevel = RunnerStats.runnerLevel(runs, bonusXp: profile.bonusXp);
+      final longestKm = validRuns.isEmpty ? 0.0 : validRuns.map((r) => r.distanceInKm).reduce(math.max);
+      final totalXp = RunnerStats.totalXp(validRuns, bonusXp: profile.bonusXp);
+      final runnerLevel = RunnerStats.runnerLevel(validRuns, bonusXp: profile.bonusXp);
 
       final basePayload = <String, dynamic>{
         'id': uid,
@@ -267,29 +276,41 @@ class AuthService {
         'city': profile.city,
         'weight_kg': profile.weightKg,
         'weekly_goal_km': profile.weeklyGoalKm,
-        'weekly_distance_km': RunnerStats.weeklyDistance(runs),
-        'weekly_runs_count': RunnerStats.weeklyRunsCount(runs),
-        'total_distance_km': RunnerStats.totalDistance(runs),
-        'total_runs_count': runs.length,
-        'total_calories': RunnerStats.totalCalories(runs),
+        'weekly_distance_km': RunnerStats.weeklyDistance(validRuns),
+        'weekly_runs_count': RunnerStats.weeklyRunsCount(validRuns),
+        'total_distance_km': RunnerStats.totalDistance(validRuns),
+        'total_runs_count': validRuns.length,
+        'total_calories': RunnerStats.totalCalories(validRuns),
         'longest_run_km': longestKm,
         'week_start_iso': weekStartIso,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       };
 
+      final extendedPayload = <String, dynamic>{
+        ...basePayload,
+        'bonus_xp': profile.bonusXp,
+        'total_xp': totalXp,
+        'runner_level': runnerLevel,
+        if (profile.avatarUrl != null && profile.avatarUrl!.isNotEmpty) 'avatar_url': profile.avatarUrl,
+      };
+
       try {
-        await supabase.from('profiles').upsert(
-          {
-            ...basePayload,
-            'bonus_xp': profile.bonusXp,
-            'total_xp': totalXp,
-            'runner_level': runnerLevel,
-          },
-          onConflict: 'id',
-        );
+        await supabase.from('profiles').upsert(extendedPayload, onConflict: 'id');
       } on PostgrestException {
-        // Fallback aman jika migrasi kolom bonus_xp/runner_level belum dijalankan di Supabase
-        await supabase.from('profiles').upsert(basePayload, onConflict: 'id');
+        try {
+          await supabase.from('profiles').upsert(
+            {
+              ...basePayload,
+              'bonus_xp': profile.bonusXp,
+              'total_xp': totalXp,
+              'runner_level': runnerLevel,
+            },
+            onConflict: 'id',
+          );
+        } on PostgrestException {
+          // Fallback aman jika migrasi kolom lanjutan belum dijalankan di Supabase
+          await supabase.from('profiles').upsert(basePayload, onConflict: 'id');
+        }
       }
       return true;
     } catch (e) {

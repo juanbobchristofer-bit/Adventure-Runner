@@ -56,6 +56,44 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
       AuthService.isLoggedIn &&
       (_event.isAttending || (_event.createdBy != null && _event.createdBy == AuthService.userId));
 
+  bool get _isOwner =>
+      AuthService.userId != null && _event.createdBy != null && _event.createdBy == AuthService.userId;
+
+  Future<void> _confirmDeleteEvent() async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppColors.cardDark,
+            title: const Text('Hapus Acara?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            content: Text(
+              'Acara "${_event.title}" beserta daftar RSVP dan diskusinya akan dihapus permanen.',
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal', style: TextStyle(color: Colors.grey))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Hapus Acara', style: TextStyle(color: Colors.white)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+    try {
+      await _communityService.deleteEvent(_event.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Acara "${_event.title}" berhasil dihapus.'), backgroundColor: AppColors.cardElevated),
+        );
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      _showSnack('Gagal menghapus acara: $e', isError: true);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -287,6 +325,12 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
             ),
             actions: [
+              if (_isOwner)
+                IconButton(
+                  tooltip: 'Hapus Acara Milik Anda',
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  onPressed: _confirmDeleteEvent,
+                ),
               IconButton(
                 tooltip: 'Segarkan Acara',
                 icon: const Icon(Icons.sync, color: Colors.white70),
@@ -689,7 +733,10 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
         itemCount: _attendees.length,
         itemBuilder: (_, idx) {
           final a = _attendees[idx];
-          final hasAvatar = a.isCurrentUser && widget.userAvatarPath != null;
+          final hasLocalAvatar = a.isCurrentUser && widget.userAvatarPath != null;
+          final ImageProvider<Object>? avatarImg = hasLocalAvatar
+              ? FileImage(File(widget.userAvatarPath!)) as ImageProvider<Object>
+              : (a.avatarUrl != null ? NetworkImage(a.avatarUrl!) : null);
 
           return GestureDetector(
             onTap: () async {
@@ -715,8 +762,8 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
                   CircleAvatar(
                     radius: 19,
                     backgroundColor: AppColors.cardElevated,
-                    backgroundImage: hasAvatar ? FileImage(File(widget.userAvatarPath!)) : null,
-                    child: !hasAvatar
+                    backgroundImage: avatarImg,
+                    child: avatarImg == null
                         ? Text(
                             a.name.trim().isNotEmpty ? a.name.trim()[0].toUpperCase() : '?',
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),

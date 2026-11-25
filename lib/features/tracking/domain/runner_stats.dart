@@ -81,9 +81,29 @@ class RunnerStats {
 
   static const int xpPerLevel = 500;
 
-  // Sistem XP terpadu: 100 XP per km + 50 XP per sesi selesai + Bonus XP hadiah tantangan/acara
-  static int totalXp(List<RunModel> runs, {int bonusXp = 0}) =>
-      (totalDistance(runs) * 100).round() + (runs.length * 50) + (bonusXp < 0 ? 0 : bonusXp);
+  /// Batas kecepatan rata-rata maksimal manusia untuk validasi Anti-Cheat Leaderboard/XP (22 km/jam ≈ pace 2:43/km)
+  static const double maxHumanAvgSpeedKmh = 22.0;
+
+  static double averageSpeedKmh(RunModel run) {
+    if (run.durationInSeconds <= 0 || run.distanceInKm <= 0) return 0.0;
+    return run.distanceInKm / (run.durationInSeconds / 3600.0);
+  }
+
+  /// Anti-Cheat sederhana: aktivitas >= 0.3 km dengan kecepatan rata-rata > 22 km/jam
+  /// ditandai tidak valid untuk XP & Leaderboard (indikasi kendaraan bermotor/sepeda cepat).
+  static bool isValidRunningActivity(RunModel run) {
+    if (run.distanceInKm < 0.3 || run.durationInSeconds <= 0) return true;
+    return averageSpeedKmh(run) <= maxHumanAvgSpeedKmh;
+  }
+
+  static List<RunModel> filterValidRuns(List<RunModel> runs) =>
+      runs.where(isValidRunningActivity).toList();
+
+  // Sistem XP terpadu (hanya menghitung aktivitas lari valid): 100 XP per km + 50 XP per sesi selesai + Bonus XP
+  static int totalXp(List<RunModel> runs, {int bonusXp = 0}) {
+    final validRuns = filterValidRuns(runs);
+    return (totalDistance(validRuns) * 100).round() + (validRuns.length * 50) + (bonusXp < 0 ? 0 : bonusXp);
+  }
 
   static int runnerLevel(List<RunModel> runs, {int bonusXp = 0}) =>
       (totalXp(runs, bonusXp: bonusXp) ~/ xpPerLevel) + 1;

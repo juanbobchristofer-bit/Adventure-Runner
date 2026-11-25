@@ -29,6 +29,7 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 *   **👟 Step Counting & Biometric Calories:** Integrates hardware pedometer streams and user weight metrics for precise calorie expenditure and cadence calculations.
 *   **📊 Post-Run Telemetry & Interactive Charts:** Elevation & Speed area charts (`TelemetryChartCard`), detailed split-per-kilometer breakdown, training intensity zones (Recovery, Aerobic, Tempo, Threshold), average speed, and one-tap summary copying for WhatsApp/Instagram.
 *   **🏆 Gamification & Profile System:** Unified XP & runner leveling (from runs + claimable challenge bonus XP), 8 unlockable milestone badges, personal best records, and editable user profiles.
+*   **☁️ Cloud Backup, Avatar Storage, Dynamic Community Map & Anti-Cheat:** Automatic cloud backup & restore for full run history (`user_runs`), profile avatar upload to Supabase Storage (`avatars` bucket), dynamic Explore Map centered on user's GPS with community-shared routes (`community_routes`), owner delete controls for Clubs/Events, and human-speed Anti-Cheat validation (`<= 22 km/h`) for XP & leaderboards.
 *   **👥 Online Community, Friends Feed + Kudos, Level Gating & Live Chat (Supabase):** Flexible authentication (Email/Password + Offline Guest Mode), Strava-style Friends Activity Feed with Kudos (👏) & mini GPS route previews, unread friend-request notification badges, level-gated Challenges with claimable XP rewards, level-gated Running Clubs with Live Weekly Leaderboards & Realtime Club Chat, level/quota-gated Community Events with Live Event Discussion, and a full Friends system with automatic offline fallback.
 
 ---
@@ -58,6 +59,7 @@ lib/
 │   │   └── app_colors.dart                  # Custom dark athletic color palette
 │   ├── services/
 │   │   ├── auth_service.dart                # Flexible Email Auth + Offline Guest Mode & cloud sync
+│   │   ├── cloud_sync_service.dart          # Avatar Storage upload, Cloud Backup/Restore & Community Routes
 │   │   ├── community_service.dart           # Online Challenges, Clubs, Events & Realtime Chat
 │   │   ├── friends_service.dart             # Search runners, Add Friend & Friends Leaderboard
 │   │   ├── location_service.dart            # Background GPS & foreground config (Android/iOS)
@@ -103,5 +105,6 @@ supabase/
 ├── migration_p2_clubs.sql                   # Club min_level & Realtime club_messages migration
 ├── migration_p3_events.sql                  # Event min_level, quota & Realtime event_messages migration
 ├── migration_p4_friends.sql                 # Friendships table & RLS migration
-└── migration_p5_social_feed.sql             # Friends Activity Feed & Kudos tables & RLS migration
+├── migration_p5_social_feed.sql             # Friends Activity Feed & Kudos tables & RLS migration
+└── migration_p6_cloud_routes.sql            # Avatar Storage bucket, user_runs backup & community_routes migration
 ```

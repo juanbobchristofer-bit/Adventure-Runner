@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../core/constants/app_colors.dart';
+import '../../../core/services/auth_service.dart';
+import '../../../core/services/cloud_sync_service.dart';
 import '../../../core/services/profile_storage_service.dart';
 import '../../../core/services/run_storage_service.dart';
 import '../../../core/utils/formatters.dart';
@@ -33,6 +35,7 @@ class _RunDetailScreenState extends State<RunDetailScreen> {
   late RunModel _run;
   bool _hasValidPhoto = false;
   bool _didModify = false;
+  bool _isSharingRoute = false;
 
   UserProfileData _profile = UserProfileData.defaultProfile;
 
@@ -137,6 +140,43 @@ Judul: ${_run.title} (${_run.date})
         backgroundColor: AppColors.cardElevated,
       ),
     );
+  }
+
+  Future<void> _shareToCommunityRoutes() async {
+    if (_isSharingRoute) return;
+    if (!AuthService.isLoggedIn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Masuk akun di tab Profil terlebih dahulu untuk membagikan rute ke Peta Komunitas.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSharingRoute = true);
+    try {
+      await CloudSyncService.shareRunAsCommunityRoute(
+        run: _run,
+        location: _profile.city,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Rute berhasil dibagikan ke Peta Jelajah Komunitas!'),
+            backgroundColor: AppColors.cardElevated,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal membagikan rute: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSharingRoute = false);
+    }
   }
 
   Future<void> _exportGpx() async {
@@ -682,6 +722,30 @@ Judul: ${_run.title} (${_run.date})
                   ],
                   const SizedBox(height: 18),
 
+                  if (!RunnerStats.isValidRunningActivity(_run)) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.55)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.shield_outlined, color: Colors.redAccent, size: 20),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Anti-Cheat: Kecepatan rata-rata ${_avgSpeedKmh.toStringAsFixed(1)} km/j melebihi batas lari manusia (${RunnerStats.maxHumanAvgSpeedKmh.toStringAsFixed(0)} km/j). Sesi ini tetap tersimpan lokal tetapi tidak dihitung ke XP & Leaderboard.',
+                              style: const TextStyle(color: Colors.white70, fontSize: 11.5, height: 1.35),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
                   // 3. GRID METRIK TELEMETRI UTAMA
                   Container(
                     padding: const EdgeInsets.all(16),
@@ -862,6 +926,31 @@ Judul: ${_run.title} (${_run.date})
                       ),
                     ],
                   ),
+                  if (pts.length >= 2) ...[
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 46,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.cyanAccent),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                        onPressed: _isSharingRoute ? null : _shareToCommunityRoutes,
+                        icon: _isSharingRoute
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.cyanAccent),
+                              )
+                            : const Icon(Icons.public, color: Colors.cyanAccent, size: 18),
+                        label: const Text(
+                          'Bagikan Rute ke Peta Jelajah Komunitas',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
