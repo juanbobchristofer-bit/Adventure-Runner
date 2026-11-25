@@ -6,6 +6,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/community_service.dart';
 import '../../../core/services/friends_service.dart';
+import '../../../core/widgets/runner_profile_sheet.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../domain/runner_stats.dart';
 
@@ -435,101 +436,113 @@ class _ClubDetailScreenState extends State<ClubDetailScreen> {
           final rank = idx + 1;
           final hasAvatar = m.isCurrentUser && widget.userAvatarPath != null;
 
-          return Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: m.isCurrentUser ? AppColors.primaryOrange.withValues(alpha: 0.16) : AppColors.cardDark,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: m.isCurrentUser ? AppColors.primaryOrange : Colors.white10),
-            ),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 28,
-                  child: Text(
-                    '#$rank',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13.5,
-                      color: rank == 1
-                          ? Colors.amber
-                          : rank == 2
-                              ? Colors.grey.shade300
-                              : rank == 3
-                                  ? Colors.orange.shade300
-                                  : AppColors.textSecondary,
+          return GestureDetector(
+            onTap: () async {
+              await RunnerProfileSheet.show(
+                context,
+                userId: m.userId,
+                fallbackName: m.name,
+                fallbackCity: m.city,
+                fallbackLevel: m.runnerLevel,
+              );
+              if (mounted) await _loadLeaderboard();
+            },
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: m.isCurrentUser ? AppColors.primaryOrange.withValues(alpha: 0.16) : AppColors.cardDark,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: m.isCurrentUser ? AppColors.primaryOrange : Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 28,
+                    child: Text(
+                      '#$rank',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13.5,
+                        color: rank == 1
+                            ? Colors.amber
+                            : rank == 2
+                                ? Colors.grey.shade300
+                                : rank == 3
+                                    ? Colors.orange.shade300
+                                    : AppColors.textSecondary,
+                      ),
                     ),
                   ),
-                ),
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: AppColors.cardElevated,
-                  backgroundImage: hasAvatar ? FileImage(File(widget.userAvatarPath!)) : null,
-                  child: !hasAvatar
-                      ? Text(
-                          m.name.trim().isNotEmpty ? m.name.trim()[0].toUpperCase() : '?',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                        )
-                      : null,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              m.isCurrentUser ? '${m.name} (Anda)' : m.name,
-                              style: TextStyle(
-                                fontWeight: m.isCurrentUser ? FontWeight.bold : FontWeight.w600,
-                                color: Colors.white,
-                                fontSize: 13.5,
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundColor: AppColors.cardElevated,
+                    backgroundImage: hasAvatar ? FileImage(File(widget.userAvatarPath!)) : null,
+                    child: !hasAvatar
+                        ? Text(
+                            m.name.trim().isNotEmpty ? m.name.trim()[0].toUpperCase() : '?',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                m.isCurrentUser ? '${m.name} (Anda)' : m.name,
+                                style: TextStyle(
+                                  fontWeight: m.isCurrentUser ? FontWeight.bold : FontWeight.w600,
+                                  color: Colors.white,
+                                  fontSize: 13.5,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.withValues(alpha: 0.18),
-                              borderRadius: BorderRadius.circular(6),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Lv.${m.runnerLevel}',
+                                style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
+                              ),
                             ),
-                            child: Text(
-                              'Lv.${m.runnerLevel}',
-                              style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${m.runsCount} sesi minggu ini • ${m.city}',
-                        style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${m.runsCount} sesi minggu ini • ${m.city}',
+                          style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  '${m.weeklyKm.toStringAsFixed(1)} km',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 14,
-                    color: m.isCurrentUser ? AppColors.primaryOrange : Colors.white,
+                  const SizedBox(width: 8),
+                  Text(
+                    '${m.weeklyKm.toStringAsFixed(1)} km',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14,
+                      color: m.isCurrentUser ? AppColors.primaryOrange : Colors.white,
+                    ),
                   ),
-                ),
-                if (!m.isCurrentUser) ...[
-                  const SizedBox(width: 6),
-                  _buildQuickFriendAction(m),
+                  if (!m.isCurrentUser) ...[
+                    const SizedBox(width: 6),
+                    _buildQuickFriendAction(m),
+                  ],
                 ],
-              ],
+              ),
             ),
           );
         },

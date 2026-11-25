@@ -102,14 +102,62 @@ class RunnerStats {
   static bool meetsLevelRequirement({required int userLevel, required int minLevel}) =>
       userLevel >= minLevel;
 
-  /// Rank pelari konsisten di HomeScreen, ProfileScreen, dan GroupScreen
-  static String rankTitle(List<RunModel> runs, {int bonusXp = 0}) {
-    final level = runnerLevel(runs, bonusXp: bonusXp);
+  /// Gelar rank pelari berdasarkan level (sumber kebenaran tunggal untuk Profil, Home, dan Profil Mini Atlet)
+  static String rankTitleForLevel(int level, {bool hasActivity = true}) {
     if (level >= 10) return 'ELITE MARATHONER';
     if (level >= 6) return 'TRAIL CONQUEROR';
     if (level >= 3) return 'CITY PACER';
-    if (runs.isNotEmpty || bonusXp > 0) return 'ACTIVE STRIDER';
+    if (hasActivity) return 'ACTIVE STRIDER';
     return 'ROOKIE RUNNER';
+  }
+
+  /// Rank pelari konsisten di HomeScreen, ProfileScreen, dan GroupScreen
+  static String rankTitle(List<RunModel> runs, {int bonusXp = 0}) {
+    final level = runnerLevel(runs, bonusXp: bonusXp);
+    return rankTitleForLevel(level, hasActivity: runs.isNotEmpty || bonusXp > 0);
+  }
+
+  /// Menghitung Current Pace (rolling window 15 detik terakhir) dari trackPoints GPS,
+  /// dengan fallback halus ke kecepatan GPS aktual saat titik masih sedikit.
+  static String calculateRollingCurrentPace(
+    List<RunTrackPoint> trackPoints, {
+    int windowSeconds = 15,
+    double? liveSpeedMs,
+  }) {
+    if (trackPoints.length >= 2) {
+      final latest = trackPoints.last;
+      final minElapsed = latest.elapsedSeconds - windowSeconds;
+      double windowMeters = 0.0;
+      int? earliestElapsed;
+
+      for (int i = trackPoints.length - 1; i >= 1; i--) {
+        final curr = trackPoints[i];
+        final prev = trackPoints[i - 1];
+        if (curr.elapsedSeconds < minElapsed) break;
+        final seg = _geoDistance.as(LengthUnit.Meter, prev.latLng, curr.latLng);
+        if (seg > 0) {
+          windowMeters += seg;
+          earliestElapsed = prev.elapsedSeconds;
+        }
+        if (prev.elapsedSeconds <= minElapsed) break;
+      }
+
+      if (earliestElapsed != null) {
+        final dt = latest.elapsedSeconds - earliestElapsed;
+        if (dt >= 3 && windowMeters >= 12.0) {
+          final paceSecPerKm = dt / (windowMeters / 1000.0);
+          if (paceSecPerKm >= 90 && paceSecPerKm <= 1800) {
+            return formatPaceFromSeconds(paceSecPerKm);
+          }
+        }
+      }
+    }
+
+    if (liveSpeedMs != null && liveSpeedMs >= 0.7 && liveSpeedMs <= 12.5) {
+      return formatPaceFromSeconds(1000.0 / liveSpeedMs);
+    }
+
+    return '--:--';
   }
 
   static String formatPaceFromSeconds(double paceSecondsPerKm) {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/friends_service.dart';
+import '../../../core/widgets/runner_profile_sheet.dart';
 
 /// Tab ke-4 di halaman Grup: Cari Pelari, Tambah Teman, Permintaan Pertemanan,
 /// dan Papan Peringkat Mingguan khusus Teman.
@@ -172,6 +173,17 @@ class _FriendsTabViewState extends State<FriendsTabView> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(msg), backgroundColor: isError ? Colors.redAccent : AppColors.cardElevated),
     );
+  }
+
+  Future<void> _openRunnerProfile(RunnerProfileSummary runner) async {
+    await RunnerProfileSheet.show(
+      context,
+      userId: runner.userId,
+      fallbackName: runner.displayName.replaceAll(' (Anda)', ''),
+      fallbackCity: runner.city,
+      fallbackLevel: runner.runnerLevel,
+    );
+    if (mounted) await _loadFriendsAndDiscover();
   }
 
   @override
@@ -404,63 +416,66 @@ class _FriendsTabViewState extends State<FriendsTabView> {
 
   Widget _buildIncomingRequestCard(FriendItem item) {
     final isBusy = _busyUserId == item.profile.userId;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.cardDark,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.primaryOrange.withValues(alpha: 0.45)),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 19,
-            backgroundColor: AppColors.cardElevated,
-            child: Text(
-              item.profile.displayName[0].toUpperCase(),
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+    return GestureDetector(
+      onTap: () => _openRunnerProfile(item.profile),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.primaryOrange.withValues(alpha: 0.45)),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 19,
+              backgroundColor: AppColors.cardElevated,
+              child: Text(
+                item.profile.displayName[0].toUpperCase(),
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        item.profile.displayName,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          item.profile.displayName,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    _buildLevelPill(item.profile.runnerLevel),
-                  ],
-                ),
-                Text(item.profile.city, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
-              ],
+                      const SizedBox(width: 6),
+                      _buildLevelPill(item.profile.runnerLevel),
+                    ],
+                  ),
+                  Text(item.profile.city, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Tolak',
-            onPressed: isBusy ? null : () => _removeRelation(item, successMessage: 'Permintaan pertemanan ditolak.'),
-            icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.accentGreen,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              minimumSize: Size.zero,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            IconButton(
+              tooltip: 'Tolak',
+              onPressed: isBusy ? null : () => _removeRelation(item, successMessage: 'Permintaan pertemanan ditolak.'),
+              icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
             ),
-            onPressed: isBusy ? null : () => _acceptRequest(item),
-            child: const Text('Terima', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
-        ],
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accentGreen,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                minimumSize: Size.zero,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: isBusy ? null : () => _acceptRequest(item),
+              child: const Text('Terima', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -471,95 +486,98 @@ class _FriendsTabViewState extends State<FriendsTabView> {
     FriendItem? friendItem,
   }) {
     final hasAvatar = runner.isCurrentUser && widget.currentUserAvatarPath != null;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: runner.isCurrentUser ? AppColors.primaryOrange.withValues(alpha: 0.16) : AppColors.cardDark,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: runner.isCurrentUser ? AppColors.primaryOrange : Colors.white10),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 26,
-            child: Text(
-              '#$rank',
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: 13,
-                color: rank == 1
-                    ? Colors.amber
-                    : rank == 2
-                        ? Colors.grey.shade300
-                        : rank == 3
-                            ? Colors.orange.shade300
-                            : AppColors.textSecondary,
+    return GestureDetector(
+      onTap: () => _openRunnerProfile(runner),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: runner.isCurrentUser ? AppColors.primaryOrange.withValues(alpha: 0.16) : AppColors.cardDark,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: runner.isCurrentUser ? AppColors.primaryOrange : Colors.white10),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 26,
+              child: Text(
+                '#$rank',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  fontSize: 13,
+                  color: rank == 1
+                      ? Colors.amber
+                      : rank == 2
+                          ? Colors.grey.shade300
+                          : rank == 3
+                              ? Colors.orange.shade300
+                              : AppColors.textSecondary,
+                ),
               ),
             ),
-          ),
-          CircleAvatar(
-            radius: 17,
-            backgroundColor: AppColors.cardElevated,
-            backgroundImage: hasAvatar ? FileImage(File(widget.currentUserAvatarPath!)) : null,
-            child: !hasAvatar
-                ? Text(
-                    runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                  )
-                : null,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        runner.displayName,
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: runner.isCurrentUser ? FontWeight.bold : FontWeight.w600,
-                          fontSize: 13.5,
+            CircleAvatar(
+              radius: 17,
+              backgroundColor: AppColors.cardElevated,
+              backgroundImage: hasAvatar ? FileImage(File(widget.currentUserAvatarPath!)) : null,
+              child: !hasAvatar
+                  ? Text(
+                      runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          runner.displayName,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: runner.isCurrentUser ? FontWeight.bold : FontWeight.w600,
+                            fontSize: 13.5,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    _buildLevelPill(runner.runnerLevel),
-                  ],
-                ),
-                Text(
-                  '${runner.weeklyRunsCount} sesi minggu ini • ${runner.city}',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                      const SizedBox(width: 6),
+                      _buildLevelPill(runner.runnerLevel),
+                    ],
+                  ),
+                  Text(
+                    '${runner.weeklyRunsCount} sesi minggu ini • ${runner.city}',
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
             ),
-          ),
-          Text(
-            '${runner.weeklyDistanceKm.toStringAsFixed(1)} km',
-            style: TextStyle(
-              color: runner.isCurrentUser ? AppColors.primaryOrange : Colors.white,
-              fontWeight: FontWeight.w900,
-              fontSize: 14,
+            Text(
+              '${runner.weeklyDistanceKm.toStringAsFixed(1)} km',
+              style: TextStyle(
+                color: runner.isCurrentUser ? AppColors.primaryOrange : Colors.white,
+                fontWeight: FontWeight.w900,
+                fontSize: 14,
+              ),
             ),
-          ),
-          if (!runner.isCurrentUser && friendItem != null) ...[
-            const SizedBox(width: 4),
-            IconButton(
-              tooltip: 'Hapus Teman',
-              constraints: const BoxConstraints(),
-              padding: const EdgeInsets.all(4),
-              icon: const Icon(Icons.person_remove_outlined, color: Colors.white38, size: 17),
-              onPressed: () => _confirmUnfriend(friendItem),
-            ),
+            if (!runner.isCurrentUser && friendItem != null) ...[
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Hapus Teman',
+                constraints: const BoxConstraints(),
+                padding: const EdgeInsets.all(4),
+                icon: const Icon(Icons.person_remove_outlined, color: Colors.white38, size: 17),
+                onPressed: () => _confirmUnfriend(friendItem),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -569,99 +587,102 @@ class _FriendsTabViewState extends State<FriendsTabView> {
     final status = relation?.status ?? FriendRelationStatus.none;
     final isBusy = _busyUserId == runner.userId;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.cardDark,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 19,
-            backgroundColor: AppColors.cardElevated,
-            child: Text(
-              runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+    return GestureDetector(
+      onTap: () => _openRunnerProfile(runner),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.cardDark,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 19,
+              backgroundColor: AppColors.cardElevated,
+              child: Text(
+                runner.displayName.trim().isNotEmpty ? runner.displayName.trim()[0].toUpperCase() : '?',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
             ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: Text(
-                        runner.displayName,
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          runner.displayName,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    _buildLevelPill(runner.runnerLevel),
-                  ],
-                ),
-                Text(
-                  '${runner.city} • Total ${runner.totalDistanceKm.toStringAsFixed(1)} km',
-                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
+                      const SizedBox(width: 6),
+                      _buildLevelPill(runner.runnerLevel),
+                    ],
+                  ),
+                  Text(
+                    '${runner.city} • Total ${runner.totalDistanceKm.toStringAsFixed(1)} km',
+                    style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          if (status == FriendRelationStatus.accepted)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.accentGreen.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text('Teman ✓', style: TextStyle(color: AppColors.accentGreen, fontSize: 11.5, fontWeight: FontWeight.bold)),
-            )
-          else if (status == FriendRelationStatus.pendingOutgoing && relation != null)
-            OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.white24),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                minimumSize: Size.zero,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: isBusy ? null : () => _removeRelation(relation, successMessage: 'Permintaan pertemanan dibatalkan.'),
-              child: const Text('Menunggu', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
-            )
-          else if (status == FriendRelationStatus.pendingIncoming && relation != null)
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accentGreen,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                minimumSize: Size.zero,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: isBusy ? null : () => _acceptRequest(relation),
-              child: const Text('Terima', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11.5)),
-            )
-          else
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryOrange,
+            const SizedBox(width: 8),
+            if (status == FriendRelationStatus.accepted)
+              Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                minimumSize: Size.zero,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                decoration: BoxDecoration(
+                  color: AppColors.accentGreen.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text('Teman ✓', style: TextStyle(color: AppColors.accentGreen, fontSize: 11.5, fontWeight: FontWeight.bold)),
+              )
+            else if (status == FriendRelationStatus.pendingOutgoing && relation != null)
+              OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.white24),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  minimumSize: Size.zero,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: isBusy ? null : () => _removeRelation(relation, successMessage: 'Permintaan pertemanan dibatalkan.'),
+                child: const Text('Menunggu', style: TextStyle(color: Colors.white70, fontSize: 11.5)),
+              )
+            else if (status == FriendRelationStatus.pendingIncoming && relation != null)
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.accentGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  minimumSize: Size.zero,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: isBusy ? null : () => _acceptRequest(relation),
+                child: const Text('Terima', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11.5)),
+              )
+            else
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryOrange,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  minimumSize: Size.zero,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: isBusy ? null : () => _sendRequest(runner),
+                icon: isBusy
+                    ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Icon(Icons.person_add_alt_1, size: 14, color: Colors.white),
+                label: const Text('Tambah', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5)),
               ),
-              onPressed: isBusy ? null : () => _sendRequest(runner),
-              icon: isBusy
-                  ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.person_add_alt_1, size: 14, color: Colors.white),
-              label: const Text('Tambah', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11.5)),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

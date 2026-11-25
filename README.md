@@ -24,7 +24,7 @@ Featuring a dark-themed athletic UI, gamification elements (XP leveling, achieve
 ## ✨ Key Features
 
 *   **📍 Real-Time GPS Tracking & Mapping:** Interactive dark-mode map powered by `flutter_map` and OpenStreetMap, complete with polyline rendering, start/finish markers, and custom auto-fit bounds.
-*   **🔋 Background GPS & Smart Auto-Pause:** Uses Android Foreground Services and wake-locks to ensure uninterrupted tracking even when the phone is locked in your pocket. Features smart auto-pause that pauses telemetry when stationary.
+*   **🔋 Background GPS, Current Pace, 1 KM Split Cues & Crash Recovery:** Uses Android Foreground Services, smart auto-pause, rolling 15-second Current Pace alongside Average Pace, haptic/audio + banner milestone cues every 1 km, and atomic 15-second auto-save drafts (`RunDraftService`) so active runs survive crashes or battery drain.
 *   **🏃‍♂️ Strava-Like Activity Posting:** Post your runs with custom titles, personal notes/captions, mood/vibe tags (`feeling`), and photo documentation captured from your gallery or camera.
 *   **👟 Step Counting & Biometric Calories:** Integrates hardware pedometer streams and user weight metrics for precise calorie expenditure and cadence calculations.
 *   **📊 Post-Run Telemetry & Interactive Charts:** Elevation & Speed area charts (`TelemetryChartCard`), detailed split-per-kilometer breakdown, training intensity zones (Recovery, Aerobic, Tempo, Threshold), average speed, and one-tap summary copying for WhatsApp/Instagram.
@@ -64,6 +64,7 @@ lib/
 │   │   ├── offline_tile_provider.dart       # Offline-first disk caching for OSM map tiles
 │   │   ├── pedometer_service.dart           # Raw step counter stream handler
 │   │   ├── profile_storage_service.dart     # User profile, biometrics & bonus XP repository
+│   │   ├── run_draft_service.dart           # Atomic auto-save checkpoint & crash recovery for active runs
 │   │   ├── run_storage_service.dart         # Atomic file-based run DB, migration & GPX export
 │   │   └── social_feed_service.dart         # Friends Activity Feed & Kudos (Supabase)
 │   ├── utils/
@@ -72,6 +73,7 @@ lib/
 │   └── widgets/
 │       ├── dark_osm_tile_layer.dart         # Reusable dark-mode OSM tile layer & attribution
 │       ├── mini_route_painter.dart          # Lightweight mini GPS polyline canvas painter
+│       ├── runner_profile_sheet.dart        # Mini athlete profile sheet (Level, XP, stats & badges)
 │       └── telemetry_chart_card.dart        # Speed & Elevation interactive area chart
 └── features/
     ├── auth/

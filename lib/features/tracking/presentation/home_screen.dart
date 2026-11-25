@@ -8,6 +8,7 @@ import '../../../core/services/run_storage_service.dart';
 import '../../../core/services/social_feed_service.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/widgets/mini_route_painter.dart';
+import '../../../core/widgets/runner_profile_sheet.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../domain/run_model.dart';
 import '../domain/runner_stats.dart';
@@ -880,50 +881,60 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 18,
-                backgroundColor: AppColors.cardElevated,
-                child: Text(
-                  post.authorName.trim().isNotEmpty ? post.authorName.trim()[0].toUpperCase() : '?',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          GestureDetector(
+            onTap: () => RunnerProfileSheet.show(
+              context,
+              userId: post.userId,
+              fallbackName: post.authorName,
+              fallbackCity: post.authorCity,
+              fallbackLevel: post.authorLevel,
+            ),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 18,
+                  backgroundColor: AppColors.cardElevated,
+                  child: Text(
+                    post.authorName.trim().isNotEmpty ? post.authorName.trim()[0].toUpperCase() : '?',
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            post.isMine ? '${post.authorName} (Anda)' : post.authorName,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              post.isMine ? '${post.authorName} (Anda)' : post.authorName,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 1.5),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.withValues(alpha: 0.18),
-                            borderRadius: BorderRadius.circular(5),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5.5, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: Colors.amber.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: Text(
+                              'Lv.${post.authorLevel}',
+                              style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
+                            ),
                           ),
-                          child: Text(
-                            'Lv.${post.authorLevel}',
-                            style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      ],
-                    ),
-                    Text('$dateText • ${post.authorCity}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
-                  ],
+                        ],
+                      ),
+                      Text('$dateText • ${post.authorCity}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                const Icon(Icons.chevron_right, size: 18, color: Colors.white30),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           Text(post.title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white)),

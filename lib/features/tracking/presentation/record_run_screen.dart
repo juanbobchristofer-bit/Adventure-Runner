@@ -9,6 +9,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/services/location_service.dart';
 import '../../../core/services/pedometer_service.dart';
 import '../../../core/services/profile_storage_service.dart';
+import '../../../core/services/run_draft_service.dart';
 import '../../../core/utils/formatters.dart';
 import '../../../core/widgets/dark_osm_tile_layer.dart';
 import '../domain/run_model.dart';
@@ -36,25 +37,33 @@ class RecordRunScreen extends StatefulWidget {
   State<RecordRunScreen> createState() => _RecordRunScreenState();
 }
 
-class _RecordRunScreenState extends State<RecordRunScreen> {
+class _RecordRunScreenState extends State<RecordRunScreen> with WidgetsBindingObserver {
   final LocationService _locationService = LocationService();
   final PedometerService _pedometerService = PedometerService();
   final ProfileStorageService _profileService = ProfileStorageService();
+  final RunDraftService _draftService = RunDraftService();
   final MapController _mapController = MapController();
 
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<int>? _stepSub;
   Timer? _timer;
   Timer? _countdownTimer;
+  Timer? _kmBannerTimer;
 
   // Status Tracking & Reliabilitas
   bool _isTracking = false;
   bool _isPaused = false;
   bool _isAutoPaused = false;
   bool _autoPauseEnabled = true;
+  bool _kmCueEnabled = true;
   bool _isLoadingLocation = true;
   bool _autoFollowCamera = true;
   int _countdownValue = 0; // > 0 saat overlay 3-2-1 aktif
+
+  // Kilometer Milestone Cue
+  int _completedKmCount = 0;
+  int _lastKmSplitSeconds = 0;
+  String? _kmMilestoneBanner;
 
   Position? _currentPosition;
   final List<LatLng> _routePoints = [];
@@ -89,19 +98,194 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _guidedRoute = GuidedRouteController.activeRoute.value;
     _loadUserWeight();
     _fetchInitialLocation();
     ProfileStorageService.profileUpdateNotifier.addListener(_loadUserWeight);
     GuidedRouteController.activeRoute.addListener(_onGuidedRouteChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkPendingDraft());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     ProfileStorageService.profileUpdateNotifier.removeListener(_loadUserWeight);
     GuidedRouteController.activeRoute.removeListener(_onGuidedRouteChanged);
+    _kmBannerTimer?.cancel();
     _cancelAllStreams();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isTracking &&
+        (state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.detached)) {
+      unawaited(_persistDraftCheckpoint());
+    }
+  }
+
+  Future<void> _persistDraftCheckpoint() async {
+    if (!_isTracking) return;
+    final draft = ActiveRunDraft(
+      modeIndex: _selectedModeIndex,
+      totalDistanceMeters: _totalDistanceInMeters,
+      elevationGainM: _elevationGainM,
+      stepCount: _stepCount,
+      elapsedSeconds: _elapsedSeconds,
+      completedKmCount: _completedKmCount,
+      lastKmSplitSeconds: _lastKmSplitSeconds,
+      routePoints: List<LatLng>.from(_routePoints),
+      trackPoints: List<RunTrackPoint>.from(_trackPoints),
+      savedAt: DateTime.now(),
+    );
+    if (draft.hasMeaningfulProgress) {
+      await _draftService.saveDraft(draft);
+    }
+  }
+
+  Future<void> _checkPendingDraft() async {
+    if (_isTracking || !mounted) return;
+    final draft = await _draftService.loadDraft();
+    if (draft == null || !mounted) return;
+
+    final distKm = (draft.totalDistanceMeters / 1000).toStringAsFixed(2);
+    final duration = AppFormatters.formatClockDuration(draft.elapsedSeconds);
+    final savedTime =
+        '${draft.savedAt.hour.toString().padLeft(2, '0')}:${draft.savedAt.minute.toString().padLeft(2, '0')}';
+
+    final action = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
+            Icon(Icons.restore_rounded, color: AppColors.primaryOrange),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Sesi Lari Belum Tersimpan',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16.5),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          'Ditemukan rekaman otomatis terakhir pukul $savedTime:\n\n'
+          '• Jarak: $distKm km\n'
+          '• Durasi: $duration\n'
+          '• Langkah: ${draft.stepCount} step\n\n'
+          'Ingin melanjutkan rekaman ini atau langsung menyimpannya?',
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 13, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'discard'),
+            child: const Text('Buang', style: TextStyle(color: Colors.redAccent)),
+          ),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.accentBlue)),
+            onPressed: () => Navigator.pop(ctx, 'save'),
+            child: const Text('Simpan Sekarang', style: TextStyle(color: AppColors.accentBlue, fontWeight: FontWeight.bold)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryOrange),
+            onPressed: () => Navigator.pop(ctx, 'resume'),
+            child: const Text('Lanjutkan', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (action == 'discard') {
+      await _draftService.clearDraft();
+    } else if (action == 'resume') {
+      _restoreDraftForResume(draft);
+    } else if (action == 'save') {
+      await _saveRecoveredDraftDirectly(draft);
+    }
+  }
+
+  void _restoreDraftForResume(ActiveRunDraft draft) {
+    final safeMode = draft.modeIndex.clamp(0, _modes.length - 1);
+    setState(() {
+      _selectedModeIndex = safeMode;
+      _totalDistanceInMeters = draft.totalDistanceMeters;
+      _elevationGainM = draft.elevationGainM;
+      _stepCount = draft.stepCount;
+      _elapsedSeconds = draft.elapsedSeconds;
+      _completedKmCount = draft.completedKmCount;
+      _lastKmSplitSeconds = draft.lastKmSplitSeconds;
+      _routePoints
+        ..clear()
+        ..addAll(draft.routePoints);
+      _trackPoints
+        ..clear()
+        ..addAll(draft.trackPoints);
+      _lastAltitudeAnchor = draft.trackPoints.isNotEmpty && draft.trackPoints.last.altitude.abs() > 0.01
+          ? draft.trackPoints.last.altitude
+          : null;
+      _isTracking = true;
+      _isPaused = true;
+      _isAutoPaused = false;
+      _isResumingSegment = true;
+    });
+    _startTimer();
+
+    if (_routePoints.isNotEmpty) {
+      try {
+        _mapController.move(_routePoints.last, 17.0);
+      } catch (_) {}
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Sesi dipulihkan dalam status Jeda. Tekan Play hijau untuk lanjut berlari!'),
+        backgroundColor: AppColors.cardElevated,
+      ),
+    );
+  }
+
+  Future<void> _saveRecoveredDraftDirectly(ActiveRunDraft draft) async {
+    final safeMode = _modes[draft.modeIndex.clamp(0, _modes.length - 1)];
+    final distKm = draft.totalDistanceMeters / 1000.0;
+    final paceStr = (draft.totalDistanceMeters >= 15 && draft.elapsedSeconds > 0)
+        ? RunnerStats.formatPaceFromSeconds(draft.elapsedSeconds / distKm)
+        : '--:--';
+    final calories = distKm * _userWeightKg * safeMode.calorieFactor;
+
+    final bool? didSave = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PostRunActivityScreen(
+          defaultTitle: safeMode.defaultTitle,
+          distanceInKm: distKm,
+          durationInSeconds: draft.elapsedSeconds,
+          pace: paceStr,
+          steps: draft.stepCount,
+          calories: calories,
+          elevationGainM: draft.elevationGainM,
+          routePoints: List<LatLng>.from(draft.routePoints),
+          trackPoints: List<RunTrackPoint>.from(draft.trackPoints),
+        ),
+      ),
+    );
+
+    await _draftService.clearDraft();
+    if (didSave == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sesi yang dipulihkan berhasil disimpan ke Home!'),
+          backgroundColor: AppColors.cardElevated,
+        ),
+      );
+    }
   }
 
   void _onGuidedRouteChanged() {
@@ -229,6 +413,9 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
       if (!_effectivelyPaused) {
         setState(() => _elapsedSeconds++);
+        if (_elapsedSeconds > 0 && _elapsedSeconds % 15 == 0) {
+          unawaited(_persistDraftCheckpoint());
+        }
       }
     });
   }
@@ -243,6 +430,49 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
     if (minutes > 99) return "--:--";
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
+  }
+
+  String _calculateCurrentPace() {
+    if (!_isTracking || _effectivelyPaused) return '--:--';
+    return RunnerStats.calculateRollingCurrentPace(
+      _trackPoints,
+      windowSeconds: 15,
+      liveSpeedMs: _currentPosition?.speed,
+    );
+  }
+
+  void _checkKmMilestone() {
+    final completedKm = _totalDistanceInMeters ~/ 1000;
+    if (completedKm > _completedKmCount) {
+      final splitSeconds = (_elapsedSeconds - _lastKmSplitSeconds).clamp(1, 36000);
+      final splitPace = RunnerStats.formatPaceFromSeconds(splitSeconds.toDouble());
+      _completedKmCount = completedKm;
+      _lastKmSplitSeconds = _elapsedSeconds;
+      _triggerKmMilestoneCue(km: completedKm, splitPace: splitPace);
+    }
+  }
+
+  void _triggerKmMilestoneCue({required int km, required String splitPace}) {
+    if (_kmCueEnabled) {
+      HapticFeedback.heavyImpact();
+      Future<void>.delayed(const Duration(milliseconds: 220), () {
+        HapticFeedback.heavyImpact();
+      });
+      unawaited(SystemSound.play(SystemSoundType.alert));
+    }
+
+    _kmBannerTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _kmMilestoneBanner =
+            'KM $km Selesai! • Split $splitPace /km • Total ${AppFormatters.formatClockDuration(_elapsedSeconds)}';
+      });
+    }
+    _kmBannerTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted) {
+        setState(() => _kmMilestoneBanner = null);
+      }
+    });
   }
 
   double get _estimatedCalories {
@@ -323,6 +553,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
               _currentPosition = position;
               _recordTrackPoint(position, newLatLng);
             });
+            _checkKmMilestone();
           } else {
             setState(() => _currentPosition = position);
           }
@@ -423,6 +654,9 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
       _stepCount = 0;
       _lastSensorSteps = null;
       _elapsedSeconds = 0;
+      _completedKmCount = 0;
+      _lastKmSplitSeconds = 0;
+      _kmMilestoneBanner = null;
       if (_currentPosition != null) {
         _recordTrackPoint(
           _currentPosition!,
@@ -431,6 +665,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
       }
     });
 
+    unawaited(_draftService.clearDraft());
     _startTimer();
     _startStreams();
   }
@@ -460,6 +695,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
       _isPaused = true;
       _isAutoPaused = false;
     });
+    unawaited(_persistDraftCheckpoint());
   }
 
   Future<void> _finishTracking() async {
@@ -488,6 +724,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
       ),
     );
 
+    await _draftService.clearDraft();
     if (didSave == true && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -552,6 +789,9 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
       _lastSensorSteps = null;
       _elapsedSeconds = 0;
       _stationarySeconds = 0;
+      _completedKmCount = 0;
+      _lastKmSplitSeconds = 0;
+      _kmMilestoneBanner = null;
       _isResumingSegment = false;
       _lastValidPointTime = null;
       _lastMovementTime = null;
@@ -653,102 +893,181 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
           Positioned(
             top: 48,
-            left: 16,
-            right: 16,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: AppColors.cardDark.withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.signal_cellular_alt,
-                        size: 14,
-                        color: _currentPosition != null ? AppColors.accentGreen : Colors.orangeAccent,
-                      ),
-                      const SizedBox(width: 5),
-                      Text(
-                        _currentPosition != null
-                            ? 'GPS Â±${_currentPosition!.accuracy.toStringAsFixed(0)}m'
-                            : 'Mencari GPS...',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: _currentPosition != null ? AppColors.accentGreen : Colors.orangeAccent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    setState(() {
-                      _autoPauseEnabled = !_autoPauseEnabled;
-                      if (!_autoPauseEnabled) _isAutoPaused = false;
-                    });
-                  },
-                  child: Container(
+            left: 14,
+            right: 14,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                     decoration: BoxDecoration(
                       color: AppColors.cardDark.withValues(alpha: 0.92),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: _autoPauseEnabled ? AppColors.accentBlue.withValues(alpha: 0.6) : Colors.white12,
-                      ),
+                      border: Border.all(color: Colors.white12),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          Icons.motion_photos_paused,
+                          Icons.signal_cellular_alt,
                           size: 14,
-                          color: _autoPauseEnabled ? AppColors.accentBlue : Colors.grey,
+                          color: _currentPosition != null ? AppColors.accentGreen : Colors.orangeAccent,
                         ),
-                        const SizedBox(width: 4),
+                        const SizedBox(width: 5),
                         Text(
-                          _autoPauseEnabled ? 'Auto-Pause ON' : 'Auto-Pause OFF',
+                          _currentPosition != null
+                              ? 'GPS ±${_currentPosition!.accuracy.toStringAsFixed(0)}m'
+                              : 'Mencari GPS...',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            color: _autoPauseEnabled ? AppColors.accentBlue : Colors.grey,
+                            color: _currentPosition != null ? AppColors.accentGreen : Colors.orangeAccent,
                           ),
                         ),
                       ],
                     ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: AppColors.cardDark.withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: Colors.white12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.local_fire_department, size: 14, color: AppColors.primaryOrange),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${_estimatedCalories.toStringAsFixed(0)} kcal',
-                        style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white),
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() {
+                        _autoPauseEnabled = !_autoPauseEnabled;
+                        if (!_autoPauseEnabled) _isAutoPaused = false;
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: AppColors.cardDark.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _autoPauseEnabled ? AppColors.accentBlue.withValues(alpha: 0.6) : Colors.white12,
+                        ),
                       ),
-                    ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.motion_photos_paused,
+                            size: 14,
+                            color: _autoPauseEnabled ? AppColors.accentBlue : Colors.grey,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _autoPauseEnabled ? 'Auto-Pause' : 'AP OFF',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _autoPauseEnabled ? AppColors.accentBlue : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _kmCueEnabled = !_kmCueEnabled);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: AppColors.cardDark.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: _kmCueEnabled ? AppColors.primaryOrange.withValues(alpha: 0.65) : Colors.white12,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _kmCueEnabled ? Icons.notifications_active_outlined : Icons.notifications_off_outlined,
+                            size: 14,
+                            color: _kmCueEnabled ? AppColors.primaryOrange : Colors.grey,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _kmCueEnabled ? '1KM Cue' : 'Cue OFF',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: _kmCueEnabled ? AppColors.primaryOrange : Colors.grey,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: AppColors.cardDark.withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.local_fire_department, size: 14, color: AppColors.primaryOrange),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${_estimatedCalories.toStringAsFixed(0)} kcal',
+                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 
-          if (_guidedRoute != null)
+          if (_kmMilestoneBanner != null)
+            Positioned(
+              top: 94,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [AppColors.primaryOrange, Color(0xFFFF7A3D)],
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primaryOrange.withValues(alpha: 0.45),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.flag_rounded, color: Colors.white, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _kmMilestoneBanner!,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          if (_guidedRoute != null && _kmMilestoneBanner == null)
             Positioned(
               top: 94,
               left: 16,
@@ -783,13 +1102,13 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
           const Positioned(
             left: 16,
-            bottom: 265,
+            bottom: 318,
             child: OsmAttributionBadge(),
           ),
 
           Positioned(
             right: 16,
-            bottom: 265,
+            bottom: 318,
             child: FloatingActionButton.small(
               heroTag: 'btn_record_recenter',
               backgroundColor: _autoFollowCamera ? AppColors.primaryOrange : AppColors.cardDark,
@@ -837,7 +1156,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                       ),
                       child: Text(
                         _isAutoPaused
-                            ? 'AUTO-PAUSED (DIAM TERDETEKSI â€¢ LANJUT OTOMATIS)'
+                            ? 'AUTO-PAUSED (DIAM TERDETEKSI • LANJUT OTOMATIS)'
                             : 'SESI DIJEDA (PAUSED)',
                         style: TextStyle(
                           color: _isAutoPaused ? AppColors.accentBlue : Colors.amber,
@@ -850,26 +1169,50 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
 
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 16),
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
                     decoration: BoxDecoration(
                       color: AppColors.cardDark,
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: Colors.white10),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    child: Column(
                       children: [
-                        _buildStravaMetric('WAKTU', AppFormatters.formatClockDuration(_elapsedSeconds)),
-                        Container(height: 32, width: 1, color: Colors.white12),
-                        _buildStravaMetric('PACE (/KM)', _calculatePace()),
-                        Container(height: 32, width: 1, color: Colors.white12),
-                        _buildStravaMetric('JARAK (KM)', (_totalDistanceInMeters / 1000).toStringAsFixed(2)),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            _buildStravaMetric('WAKTU', AppFormatters.formatClockDuration(_elapsedSeconds)),
+                            Container(height: 30, width: 1, color: Colors.white12),
+                            _buildStravaMetric(
+                              'JARAK (KM)',
+                              (_totalDistanceInMeters / 1000).toStringAsFixed(2),
+                              valueColor: AppColors.primaryOrange,
+                            ),
+                          ],
+                        ),
+                        const Divider(height: 16, color: Colors.white10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            _buildStravaMetric(
+                              'CURRENT PACE',
+                              _calculateCurrentPace(),
+                              fontSize: 18,
+                              valueColor: _isTracking && !_effectivelyPaused ? AppColors.accentGreen : Colors.white70,
+                            ),
+                            Container(height: 24, width: 1, color: Colors.white12),
+                            _buildStravaMetric(
+                              'AVG PACE (/KM)',
+                              _calculatePace(),
+                              fontSize: 18,
+                            ),
+                          ],
+                        ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 16),
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 26, left: 24, right: 24),
+                    padding: const EdgeInsets.only(bottom: 24, left: 24, right: 24),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -892,7 +1235,7 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                _isTracking ? _currentMode.name : '${_currentMode.name} â–¾',
+                                _isTracking ? _currentMode.name : '${_currentMode.name} ▾',
                                 style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.w600),
                               ),
                             ],
@@ -1053,17 +1396,22 @@ class _RecordRunScreenState extends State<RecordRunScreen> {
     );
   }
 
-  Widget _buildStravaMetric(String label, String value) {
+  Widget _buildStravaMetric(
+    String label,
+    String value, {
+    double fontSize = 22,
+    Color valueColor = Colors.white,
+  }) {
     return Column(
       children: [
         Text(
           value,
-          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white),
+          style: TextStyle(fontSize: fontSize, fontWeight: FontWeight.w900, color: valueColor),
         ),
-        const SizedBox(height: 3),
+        const SizedBox(height: 2),
         Text(
           label,
-          style: const TextStyle(fontSize: 10, color: AppColors.textSecondary, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+          style: const TextStyle(fontSize: 9.5, color: AppColors.textSecondary, fontWeight: FontWeight.w600, letterSpacing: 0.5),
         ),
       ],
     );

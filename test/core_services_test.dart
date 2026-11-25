@@ -3,10 +3,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:adventure_runner/core/services/offline_tile_provider.dart';
+import 'package:adventure_runner/core/services/run_draft_service.dart';
 import 'package:adventure_runner/core/services/run_storage_service.dart';
 import 'package:adventure_runner/core/utils/formatters.dart';
 import 'package:adventure_runner/core/utils/gpx_exporter.dart';
 import 'package:adventure_runner/features/tracking/domain/run_model.dart';
+import 'package:adventure_runner/features/tracking/domain/runner_stats.dart';
 
 void main() {
   group('AppFormatters', () {
@@ -160,6 +162,77 @@ void main() {
     test('isStale flags timestamps older than 30 days', () {
       expect(OfflineTileCacheService.isStale(DateTime.now().subtract(const Duration(days: 5))), isFalse);
       expect(OfflineTileCacheService.isStale(DateTime.now().subtract(const Duration(days: 35))), isTrue);
+    });
+  });
+
+  group('RunDraftService anti-crash checkpointing', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('adventure_runner_draft_test_');
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('saves, reloads, and clears active run draft atomically', () async {
+      final service = RunDraftService(baseDir: tempDir);
+      expect(await service.loadDraft(), isNull);
+
+      final draft = ActiveRunDraft(
+        modeIndex: 1,
+        totalDistanceMeters: 1245.5,
+        elevationGainM: 18.0,
+        stepCount: 1520,
+        elapsedSeconds: 410,
+        completedKmCount: 1,
+        lastKmSplitSeconds: 330,
+        routePoints: const [LatLng(-6.9311, 107.7733), LatLng(-6.9250, 107.7750)],
+        trackPoints: const [
+          RunTrackPoint(latitude: -6.9311, longitude: 107.7733, altitude: 710.0, elapsedSeconds: 0),
+          RunTrackPoint(latitude: -6.9250, longitude: 107.7750, altitude: 728.0, elapsedSeconds: 410),
+        ],
+        savedAt: DateTime.utc(2026, 11, 26, 6, 30, 0),
+      );
+
+      await service.saveDraft(draft);
+      final restored = await service.loadDraft();
+      expect(restored, isNotNull);
+      expect(restored!.modeIndex, 1);
+      expect(restored.totalDistanceMeters, closeTo(1245.5, 0.01));
+      expect(restored.completedKmCount, 1);
+      expect(restored.lastKmSplitSeconds, 330);
+      expect(restored.trackPoints.length, 2);
+
+      await service.clearDraft();
+      expect(await service.loadDraft(), isNull);
+    });
+  });
+
+  group('RunnerStats Poin 2 telemetry helpers', () {
+    test('calculateRollingCurrentPace computes recent 15s window pace and falls back to live speed', () {
+      // ~55.6 m dalam 15 detik => ~4:30 /km
+      const pts = [
+        RunTrackPoint(latitude: -6.9300, longitude: 107.7700, altitude: 700, elapsedSeconds: 0),
+        RunTrackPoint(latitude: -6.9295, longitude: 107.7700, altitude: 701, elapsedSeconds: 15),
+      ];
+      final rolling = RunnerStats.calculateRollingCurrentPace(pts, windowSeconds: 15);
+      expect(rolling, isNot('--:--'));
+
+      // Fallback ke liveSpeedMs (3.333 m/s => 5:00 /km)
+      final liveOnly = RunnerStats.calculateRollingCurrentPace(const [], liveSpeedMs: 1000 / 300);
+      expect(liveOnly, '5:00');
+    });
+
+    test('rankTitleForLevel returns consistent rank tiers', () {
+      expect(RunnerStats.rankTitleForLevel(1, hasActivity: false), 'ROOKIE RUNNER');
+      expect(RunnerStats.rankTitleForLevel(1, hasActivity: true), 'ACTIVE STRIDER');
+      expect(RunnerStats.rankTitleForLevel(3), 'CITY PACER');
+      expect(RunnerStats.rankTitleForLevel(6), 'TRAIL CONQUEROR');
+      expect(RunnerStats.rankTitleForLevel(10), 'ELITE MARATHONER');
     });
   });
 }

@@ -6,6 +6,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../core/services/auth_service.dart';
 import '../../../core/services/community_service.dart';
 import '../../../core/services/friends_service.dart';
+import '../../../core/widgets/runner_profile_sheet.dart';
 import '../../auth/presentation/login_screen.dart';
 import '../domain/runner_stats.dart';
 
@@ -690,66 +691,78 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
           final a = _attendees[idx];
           final hasAvatar = a.isCurrentUser && widget.userAvatarPath != null;
 
-          return Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: a.isCurrentUser ? AppColors.accentGreen.withValues(alpha: 0.14) : AppColors.cardDark,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: a.isCurrentUser ? AppColors.accentGreen : Colors.white10),
-            ),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 19,
-                  backgroundColor: AppColors.cardElevated,
-                  backgroundImage: hasAvatar ? FileImage(File(widget.userAvatarPath!)) : null,
-                  child: !hasAvatar
-                      ? Text(
-                          a.name.trim().isNotEmpty ? a.name.trim()[0].toUpperCase() : '?',
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
-                        )
-                      : null,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              a.isCurrentUser ? '${a.name} (Anda)' : a.name,
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.withValues(alpha: 0.18),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              'Lv.${a.runnerLevel}',
-                              style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(a.city, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
-                    ],
+          return GestureDetector(
+            onTap: () async {
+              await RunnerProfileSheet.show(
+                context,
+                userId: a.userId,
+                fallbackName: a.name,
+                fallbackCity: a.city,
+                fallbackLevel: a.runnerLevel,
+              );
+              if (mounted) await _loadAttendees();
+            },
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: a.isCurrentUser ? AppColors.accentGreen.withValues(alpha: 0.14) : AppColors.cardDark,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: a.isCurrentUser ? AppColors.accentGreen : Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 19,
+                    backgroundColor: AppColors.cardElevated,
+                    backgroundImage: hasAvatar ? FileImage(File(widget.userAvatarPath!)) : null,
+                    child: !hasAvatar
+                        ? Text(
+                            a.name.trim().isNotEmpty ? a.name.trim()[0].toUpperCase() : '?',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                          )
+                        : null,
                   ),
-                ),
-                if (a.isCurrentUser)
-                  const Icon(Icons.check_circle, color: AppColors.accentGreen, size: 18)
-                else
-                  _buildQuickFriendAction(a),
-              ],
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                a.isCurrentUser ? '${a.name} (Anda)' : a.name,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13.5),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.withValues(alpha: 0.18),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Lv.${a.runnerLevel}',
+                                style: const TextStyle(color: Colors.amber, fontSize: 9.5, fontWeight: FontWeight.w800),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(a.city, style: const TextStyle(color: AppColors.textSecondary, fontSize: 11.5)),
+                      ],
+                    ),
+                  ),
+                  if (a.isCurrentUser)
+                    const Icon(Icons.check_circle, color: AppColors.accentGreen, size: 18)
+                  else
+                    _buildQuickFriendAction(a),
+                ],
+              ),
             ),
           );
         },
